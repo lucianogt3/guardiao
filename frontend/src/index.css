@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 min-h-screen text-white font-body;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-gradient-to-r from-yellow-500 to-yellow-600 text-gray-900 font-bold py-3 px-6 rounded-lg shadow-lg hover:from-yellow-400 hover:to-yellow-500 transition-all duration-200 transform hover:scale-105 active:scale-95;
+  }
+  
+  .btn-secondary {
+    @apply bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold py-3 px-6 rounded-lg shadow-lg hover:from-purple-500 hover:to-indigo-500 transition-all duration-200;
+  }
+  
+  .card-medieval {
+    @apply bg-gray-800 bg-opacity-80 backdrop-blur-sm rounded-2xl border-2 border-yellow-600 shadow-2xl p-6;
+  }
+  
+  .escudo {
+    @apply w-20 h-20 rounded-full flex items-center justify-center text-3xl font-bold shadow-lg transition-all duration-300 cursor-pointer hover:scale-110;
+  }
+  
+  .escudo-bloqueado {
+    @apply bg-gray-600 text-gray-400 cursor-not-allowed filter grayscale;
+  }
+  
+  .escudo-liberado {
+    @apply bg-gradient-to-br from-yellow-500 to-orange-600 text-white shadow-yellow-500/50;
+  }
+  
+  .escudo-concluido {
+    @apply bg-gradient-to-br from-green-500 to-emerald-600 text-white shadow-green-500/50;
+  }
+}
+.btn-secondary {
+  background: linear-gradient(90deg, #9333ea, #4f46e5);
+  color: white;
+  font-weight: bold;
+  border-radius: 0.5rem;
+  box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3);
+  transition: all 0.2s;
+}
+.btn-secondary:hover {
+  transform: scale(1.02);
+  background: linear-gradient(90deg, #7e22ce, #4338ca);
+}
+.connection-line {
+  stroke-dasharray: 8 6;
+  animation: dash 20s linear infinite;
+}
+@keyframes dash {
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+
+/* Animações para as linhas da trilha */
+.connection-line {
+  stroke-dasharray: 10 8;
+  animation: dash 20s linear infinite;
+}
+
+@keyframes dash {
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+
+/* Efeito de brilho nas linhas ao passar o mouse (opcional) */
+.animated-line:hover {
+  stroke: #fbbf24;
+  stroke-width: 4;
+  filter: drop-shadow(0 0 4px #fbbf24);
+}
