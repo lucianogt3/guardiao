@@ -15,6 +15,7 @@ class Usuario(db.Model):
     derrotas_pvp = db.Column(db.Integer, default=0)
     metas_concluidas = db.Column(db.String(100), default='')
     data_cadastro = db.Column(db.DateTime, default=datetime.utcnow)
+    ultimo_giro = db.Column(db.String(10), nullable=True) # Salva '2026-04-09'
     
     def completar_meta(self, meta_id):
         if not self.metas_concluidas:
@@ -64,3 +65,5 @@ class Pontuacao(db.Model):
     questoes_acertadas = db.Column(db.Integer, default=0)
     batalhas_vencidas = db.Column(db.Integer, default=0)
     data_atualizacao = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+

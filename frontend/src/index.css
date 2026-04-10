@@ -77,3 +77,34 @@
   stroke-width: 4;
   filter: drop-shadow(0 0 4px #fbbf24);
 }
+
+/* Adicione ao final do seu arquivo CSS (após os @tailwind) */
+
+/* Remove duplicatas: mantenha apenas uma definição de .btn-secondary */
+.btn-secondary {
+  @apply bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold py-3 px-6 rounded-lg shadow-lg hover:from-purple-500 hover:to-indigo-500 transition-all duration-200;
+}
+
+/* Melhor animação para as linhas de conexão */
+.connection-line {
+  stroke-dasharray: 10 8;
+  animation: dash 20s linear infinite;
+}
+
+@keyframes dash {
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+
+.animated-line:hover {
+  stroke: #fbbf24;
+  stroke-width: 4;
+  filter: drop-shadow(0 0 4px #fbbf24);
+  transition: all 0.2s ease;
+}
+
+/* Classes extras para a roleta (se precisar de ajustes específicos) */
+.wheel-wrapper {
+  filter: drop-shadow(0 10px 15px rgba(0,0,0,0.5));
+}

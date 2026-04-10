@@ -13,6 +13,7 @@ const server = http.createServer(app);
 const PORT = 5030;
 const DB_FILE = './guardiao_hcor.db';
 const CORS_ORIGINS = [
+  'https://guardiao.nursetec.com.br',
   'http://guardiao.nursetec.com.br',
   'http://localhost:5173',
   'http://localhost:3000'
@@ -30,14 +31,19 @@ app.use(cors({
 app.use(express.json());
 
 // =========================
-// SOCKET.IO
+// SOCKET.IO (CORRIGIDO PARA ESTABILIDADE WSS/NGINX)
 // =========================
 const io = socketIo(server, {
   cors: {
     origin: CORS_ORIGINS,
     credentials: true,
     methods: ['GET', 'POST']
-  }
+  },
+  allowEIO3: true,
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  connectTimeout: 45000,
+  transports: ['polling', 'websocket']
 });
 
 // =========================
@@ -46,8 +52,10 @@ const io = socketIo(server, {
 const db = new Database(DB_FILE);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+db.pragma('busy_timeout = 5000');
 
 console.log(`✅ SQLite conectado em ${DB_FILE}`);
+console.log(`🚀 Motor de Batalha sincronizado para Produção (HTTPS)`);
 
 // =========================
 // SCHEMA
@@ -61,7 +69,9 @@ function initDatabase() {
       avatar TEXT,
       level INTEGER DEFAULT 1,
       xp INTEGER DEFAULT 0,
-      setor TEXT
+      setor TEXT,
+      vitorias_pvp INTEGER DEFAULT 0,
+      derrotas_pvp INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS metas (
@@ -106,17 +116,17 @@ function initDatabase() {
 initDatabase();
 
 // =========================
-// PREPARED STATEMENTS (ATUALIZADOS)
+// PREPARED STATEMENTS
 // =========================
 
 const stmtGetUsuarioById = db.prepare(`
-  SELECT id, nome, matricula, avatar, level, xp, setor
+  SELECT id, nome, matricula, avatar, level, xp, setor, vitorias_pvp, derrotas_pvp
   FROM usuarios
   WHERE id = ?
 `);
 
 const stmtGetUsuarioByMatricula = db.prepare(`
-  SELECT id, nome, matricula, avatar, level, xp, setor
+  SELECT id, nome, matricula, avatar, level, xp, setor, vitorias_pvp, derrotas_pvp
   FROM usuarios
   WHERE matricula = ? AND setor = ?
 `);
@@ -169,10 +179,10 @@ const stmtGetRanking = db.prepare(`
     u.setor,
     u.level,
     u.xp AS pontos,
-    COALESCE((SELECT COUNT(*) FROM batalhas WHERE usuario_id = u.id AND venceu = 1), 0) AS vitorias,
-    COALESCE((SELECT COUNT(*) FROM batalhas WHERE usuario_id = u.id AND venceu = 0), 0) AS derrotas
+    u.vitorias_pvp AS vitorias,
+    u.derrotas_pvp AS derrotas
   FROM usuarios u
-  ORDER BY u.xp DESC, vitorias DESC, u.nome ASC
+  ORDER BY u.xp DESC, u.vitorias_pvp DESC, u.nome ASC
 `);
 
 const stmtInsertBatalha = db.prepare(`
@@ -183,6 +193,18 @@ const stmtInsertBatalha = db.prepare(`
 const stmtAddXp = db.prepare(`
   UPDATE usuarios
   SET xp = COALESCE(xp, 0) + ?
+  WHERE id = ?
+`);
+
+const stmtAddVitoria = db.prepare(`
+  UPDATE usuarios
+  SET vitorias_pvp = COALESCE(vitorias_pvp, 0) + 1
+  WHERE id = ?
+`);
+
+const stmtAddDerrota = db.prepare(`
+  UPDATE usuarios
+  SET derrotas_pvp = COALESCE(derrotas_pvp, 0) + 1
   WHERE id = ?
 `);
 
@@ -202,16 +224,15 @@ const stmtLevelUpByXp = db.prepare(`
   END
   WHERE id = ?
 `);
+
 // =========================
 // ROTAS DA API
 // =========================
 
-// ========== AUTENTICAÇÃO ==========
-
-// Rota de cadastro (com matrícula e setor)
+// Rota de cadastro
 app.post('/api/cadastro', (req, res) => {
   try {
-    const { matricula, setor, avatar } = req.body;
+    const { matricula, setor, avatar, nome } = req.body;
     
     if (!matricula || !String(matricula).trim()) {
       return res.status(400).json({ error: 'Matrícula é obrigatória' });
@@ -221,7 +242,6 @@ app.post('/api/cadastro', (req, res) => {
       return res.status(400).json({ error: 'Setor é obrigatório' });
     }
     
-    // Verificar se matrícula já existe
     const checkUser = db.prepare('SELECT id, matricula, setor FROM usuarios WHERE matricula = ?');
     const existingUser = checkUser.get(String(matricula).trim());
     
@@ -229,34 +249,40 @@ app.post('/api/cadastro', (req, res) => {
       return res.status(400).json({ error: 'Matrícula já cadastrada' });
     }
     
-    const nome = data.nome && data.nome.trim() ? data.nome.trim() : `Guardião ${matricula}`;
+    const nomeFinal = nome && nome.trim() ? nome.trim() : `Jogador ${matricula}`;
     
     const insert = db.prepare(`
-      INSERT INTO usuarios (nome, matricula, avatar, level, xp, setor)
-      VALUES (?, ?, ?, 1, 0, ?)
+      INSERT INTO usuarios (nome, matricula, avatar, level, xp, setor, vitorias_pvp, derrotas_pvp)
+      VALUES (?, ?, ?, 1, 0, ?, 0, 0)
     `);
     
     const result = insert.run(
-      nome,
-      String(matricula).trim(), 
-      avatar || '🛡️', 
+      nomeFinal,
+      String(matricula).trim(),
+      avatar || '🛡️',
       String(setor).trim()
     );
     
     const usuario = db.prepare(`
-      SELECT id, nome, matricula, avatar, level, xp, setor
+      SELECT id, nome, matricula, avatar, level, xp, setor, vitorias_pvp, derrotas_pvp
       FROM usuarios WHERE id = ?
     `).get(result.lastInsertRowid);
     
     res.json({
-      id: usuario.id,
-      nome: usuario.nome,
-      matricula: usuario.matricula,
-      avatar: usuario.avatar,
-      level: usuario.level,
-      xp: usuario.xp,
-      setor: usuario.setor,
-      metas_concluidas: []
+      success: true,
+      mensagem: 'Cadastro realizado com sucesso!',
+      usuario: {
+        id: usuario.id,
+        nome: usuario.nome,
+        matricula: usuario.matricula,
+        avatar: usuario.avatar,
+        level: usuario.level,
+        xp: usuario.xp,
+        setor: usuario.setor,
+        vitorias_pvp: usuario.vitorias_pvp,
+        derrotas_pvp: usuario.derrotas_pvp,
+        metas_concluidas: []
+      }
     });
   } catch (error) {
     console.error('Erro no cadastro:', error);
@@ -264,7 +290,7 @@ app.post('/api/cadastro', (req, res) => {
   }
 });
 
-// Rota de login (com matrícula e setor)
+// Rota de login
 app.post('/api/login', (req, res) => {
   try {
     const { matricula, setor } = req.body;
@@ -277,25 +303,15 @@ app.post('/api/login', (req, res) => {
       return res.status(400).json({ error: 'Setor é obrigatório' });
     }
     
-    // Buscar usuário por matrícula e setor
-    const stmtGetUsuarioByMatricula = db.prepare(`
-      SELECT id, nome, matricula, avatar, level, xp, setor
-      FROM usuarios
-      WHERE matricula = ? AND setor = ?
-    `);
-    
     let usuario = stmtGetUsuarioByMatricula.get(String(matricula).trim(), String(setor).trim());
     
     if (!usuario) {
-      // Matrícula ou setor incorreto
       return res.status(401).json({ error: 'Matrícula ou setor incorretos' });
     }
     
-    // Buscar metas concluídas
-    const metasConcluidasStmt = db.prepare(`
-      SELECT meta_id FROM metas_concluidas WHERE usuario_id = ?
-    `);
-    const metasConcluidas = metasConcluidasStmt.all(usuario.id).map(row => row.meta_id);
+    const metasConcluidas = stmtGetMetasConcluidas.all(usuario.id).map(row => row.meta_id);
+    
+    const posicaoRanking = stmtGetRanking.all().findIndex(r => r.id === usuario.id) + 1;
     
     res.json({
       id: usuario.id,
@@ -305,7 +321,10 @@ app.post('/api/login', (req, res) => {
       level: usuario.level,
       xp: usuario.xp,
       setor: usuario.setor,
-      metas_concluidas: metasConcluidas
+      vitorias_pvp: usuario.vitorias_pvp || 0,
+      derrotas_pvp: usuario.derrotas_pvp || 0,
+      metas_concluidas: metasConcluidas,
+      ranking_posicao: posicaoRanking
     });
   } catch (error) {
     console.error('Erro no login:', error);
@@ -313,31 +332,37 @@ app.post('/api/login', (req, res) => {
   }
 });
 
-// Rota para verificar se matrícula existe (usado no cadastro)
-app.post('/api/verificar-matricula', (req, res) => {
+// Rota para perfil
+app.get('/api/perfil/:usuarioId', (req, res) => {
   try {
-    const { matricula } = req.body;
+    const usuarioId = Number(req.params.usuarioId);
+    const usuario = stmtGetUsuarioById.get(usuarioId);
     
-    if (!matricula || !String(matricula).trim()) {
-      return res.status(400).json({ error: 'Matrícula é obrigatória' });
+    if (!usuario) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
     }
     
-    const checkUser = db.prepare('SELECT id, setor FROM usuarios WHERE matricula = ?');
-    const usuario = checkUser.get(String(matricula).trim());
+    const metasConcluidas = stmtGetMetasConcluidas.all(usuarioId).map(row => row.meta_id);
+    const xpProximo = 600 - (usuario.xp % 600);
     
-    if (usuario) {
-      res.json({ existe: true, setor: usuario.setor });
-    } else {
-      res.json({ existe: false });
-    }
+    res.json({
+      nome: usuario.nome,
+      setor: usuario.setor,
+      avatar: usuario.avatar,
+      xp: usuario.xp,
+      level: usuario.level,
+      xp_proximo_level: xpProximo,
+      metas_concluidas: metasConcluidas,
+      vitorias_pvp: usuario.vitorias_pvp || 0,
+      derrotas_pvp: usuario.derrotas_pvp || 0
+    });
   } catch (error) {
-    console.error('Erro ao verificar matrícula:', error);
-    res.status(500).json({ error: 'Erro ao verificar matrícula' });
+    console.error('Erro /api/perfil:', error);
+    res.status(500).json({ error: 'Erro interno' });
   }
 });
 
-// ========== METAS ==========
-
+// Rota de metas
 app.get('/api/metas', (req, res) => {
   try {
     const dados = stmtGetMetas.all();
@@ -348,14 +373,12 @@ app.get('/api/metas', (req, res) => {
   }
 });
 
-// ========== QUESTÕES ==========
-
+// Rota de questões
 app.get('/api/questoes/:metaId', (req, res) => {
   try {
     const metaId = Number(req.params.metaId);
     const dados = stmtGetQuestoesByMeta.all(metaId);
     
-    // Normalizar questões para o frontend
     const questoesFormatadas = dados.map(questao => ({
       id: questao.id,
       meta_id: questao.meta_id,
@@ -364,12 +387,6 @@ app.get('/api/questoes/:metaId', (req, res) => {
       opcao_b: questao.opcao_b,
       opcao_c: questao.opcao_c,
       opcao_d: questao.opcao_d,
-      opcoes: {
-        A: questao.opcao_a,
-        B: questao.opcao_b,
-        C: questao.opcao_c,
-        D: questao.opcao_d
-      },
       resposta_correta: questao.resposta_correta,
       explicacao: questao.explicacao,
       dificuldade: questao.dificuldade
@@ -382,11 +399,10 @@ app.get('/api/questoes/:metaId', (req, res) => {
   }
 });
 
-// ========== RESPONDER QUESTÃO ==========
-
+// Rota de responder
 app.post('/api/responder', (req, res) => {
   try {
-    const { questao_id, resposta, usuario_id, meta_id } = req.body;
+    const { questao_id, resposta } = req.body;
     
     const questao = stmtGetQuestaoById.get(Number(questao_id));
     
@@ -394,14 +410,13 @@ app.post('/api/responder', (req, res) => {
       return res.status(404).json({ error: 'Questão não encontrada' });
     }
     
-    // Verificar se a resposta está correta
     const respostaNormalizada = String(resposta).trim().toUpperCase();
     const corretaLetra = String(questao.resposta_correta).trim().toUpperCase();
     const correta = respostaNormalizada === corretaLetra;
     
     res.json({
       correta,
-      pontos_ganhos: correta ? 10 : 0,
+      pontos_ganhos: correta ? 10 * (questao.dificuldade || 1) : 0,
       explicacao: questao.explicacao,
       resposta_correta: questao.resposta_correta
     });
@@ -411,33 +426,25 @@ app.post('/api/responder', (req, res) => {
   }
 });
 
-// ========== COMPLETAR META ==========
-
+// Rota de completar meta
 app.post('/api/completar-meta/:metaId', (req, res) => {
   try {
     const metaId = Number(req.params.metaId);
-    // CORREÇÃO: Pega o usuario_id do body da requisição
     const usuario_id = req.body.usuario_id;
     
-    console.log('📝 Completar meta - metaId:', metaId);
-    console.log('📝 Completar meta - usuario_id:', usuario_id);
-    console.log('📝 Body completo:', req.body);
-    
     if (!metaId || isNaN(metaId)) {
-      return res.status(400).json({ error: 'metaId é obrigatório e deve ser um número' });
+      return res.status(400).json({ error: 'metaId é obrigatório' });
     }
     
     if (!usuario_id) {
       return res.status(400).json({ error: 'usuario_id é obrigatório' });
     }
     
-    // Verificar se o usuário existe
     const usuario = stmtGetUsuarioById.get(usuario_id);
     if (!usuario) {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
     
-    // Verificar se já foi concluída
     const checkStmt = db.prepare(`
       SELECT * FROM metas_concluidas 
       WHERE usuario_id = ? AND meta_id = ?
@@ -447,40 +454,29 @@ app.post('/api/completar-meta/:metaId', (req, res) => {
     if (jaConcluida) {
       return res.json({
         success: true,
+        meta_completada: true,
         ja_concluida: true,
         xp_ganho: 0,
-        mensagem: 'Meta já concluída anteriormente',
+        novo_level: usuario.level,
         metas_concluidas: stmtGetMetasConcluidas.all(usuario_id).map(row => row.meta_id)
       });
     }
     
-    // Registrar conclusão
     stmtInsertMetaConcluida.run(usuario_id, metaId);
     stmtAddXp.run(100, usuario_id);
     stmtLevelUpByXp.run(usuario_id);
     
-    // Buscar metas concluídas atualizadas
     const metasConcluidas = stmtGetMetasConcluidas.all(usuario_id).map(row => row.meta_id);
-    
-    // Buscar usuário atualizado
     const usuarioAtualizado = stmtGetUsuarioById.get(usuario_id);
-    
-    console.log(`✅ Meta ${metaId} concluída para usuário ${usuario_id}`);
     
     res.json({
       success: true,
+      meta_completada: true,
       ja_concluida: false,
       xp_ganho: 100,
+      novo_level: usuarioAtualizado.level,
       metas_concluidas: metasConcluidas,
-      usuario: {
-        id: usuarioAtualizado.id,
-        nome: usuarioAtualizado.nome,
-        matricula: usuarioAtualizado.matricula,
-        avatar: usuarioAtualizado.avatar,
-        level: usuarioAtualizado.level,
-        xp: usuarioAtualizado.xp,
-        setor: usuarioAtualizado.setor
-      }
+      elegivel_sorteio: metasConcluidas.length === 6
     });
   } catch (error) {
     console.error('Erro ao completar meta:', error);
@@ -488,11 +484,11 @@ app.post('/api/completar-meta/:metaId', (req, res) => {
   }
 });
 
-// ========== RANKING ==========
-
+// Rota de ranking
 app.get('/api/ranking_completo', (req, res) => {
   try {
-    const ranking = stmtGetRanking.all().map(r => ({
+    const ranking = stmtGetRanking.all().map((r, idx) => ({
+      posicao: idx + 1,
       id: r.id,
       nome: r.nome,
       avatar: r.avatar,
@@ -510,52 +506,24 @@ app.get('/api/ranking_completo', (req, res) => {
   }
 });
 
-// ========== USUÁRIOS ==========
-
-app.post('/api/usuarios', (req, res) => {
+// Rota de ranking simples
+app.get('/api/ranking', (req, res) => {
   try {
-    const { nome, avatar = '🛡️', setor = 'Geral' } = req.body;
-    
-    if (!nome || !String(nome).trim()) {
-      return res.status(400).json({ error: 'Nome é obrigatório.' });
-    }
-    
-    const insert = db.prepare(`
-      INSERT INTO usuarios (nome, avatar, level, xp, setor)
-      VALUES (?, ?, 1, 0, ?)
-    `);
-    
-    const result = insert.run(String(nome).trim(), avatar, setor);
-    const usuario = stmtGetUsuarioById.get(result.lastInsertRowid);
-    
-    res.status(201).json(usuario);
+    const ranking = stmtGetRanking.all().slice(0, 20).map(r => ({
+      nome: r.nome,
+      avatar: r.avatar,
+      pontos: r.pontos,
+      setor: r.setor,
+      level: r.level
+    }));
+    res.json(ranking);
   } catch (e) {
-    console.error('Erro /api/usuarios:', e);
+    console.error('Erro /api/ranking:', e);
     res.status(500).json({ error: e.message });
   }
 });
 
-app.get('/api/usuarios/:id', (req, res) => {
-  try {
-    const usuario = stmtGetUsuarioById.get(Number(req.params.id));
-    if (!usuario) {
-      return res.status(404).json({ error: 'Usuário não encontrado.' });
-    }
-    
-    const metasConcluidas = stmtGetMetasConcluidas.all(usuario.id).map(row => row.meta_id);
-    
-    res.json({
-      ...usuario,
-      metas_concluidas: metasConcluidas
-    });
-  } catch (e) {
-    console.error('Erro /api/usuarios/:id:', e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ========== HEALTH CHECK ==========
-
+// Health check
 app.get('/health', (req, res) => {
   try {
     const totalMetas = db.prepare('SELECT COUNT(*) AS total FROM metas').get().total;
@@ -569,9 +537,9 @@ app.get('/health', (req, res) => {
       metas: totalMetas,
       questoes: totalQuestoes,
       usuarios: totalUsuarios,
-      online: usuariosOnline ? usuariosOnline.size : 0,
-      fila: filaBatalha ? filaBatalha.length : 0,
-      batalhas_ativas: salasBatalha ? salasBatalha.size : 0
+      online: usuariosOnline.size,
+      fila: filaBatalha.length,
+      batalhas_ativas: salasBatalha.size
     });
   } catch (e) {
     console.error('Erro /health:', e);
@@ -586,6 +554,25 @@ const salasBatalha = new Map();
 const filaBatalha = [];
 const usuariosOnline = new Map();
 const desafiosPendentes = new Map();
+
+// =========================
+// BROADCAST PARA ATUALIZAR LISTA
+// =========================
+function broadcastListaOnline() {
+  const onlinePlayers = Array.from(usuariosOnline.values()).map(u => ({
+    id: u.id,
+    nome: u.nome,
+    avatar: u.avatar,
+    level: u.level,
+    xp: u.xp,
+    setor: u.setor,
+    vitorias_pvp: u.vitorias_pvp || 0,
+    derrotas_pvp: u.derrotas_pvp || 0
+  }));
+  
+  console.log(`📡 Broadcast lista online: ${onlinePlayers.length} jogadores`);
+  io.emit('lista_online', onlinePlayers);
+}
 
 // =========================
 // HELPERS
@@ -660,14 +647,7 @@ function normalizarQuestao(questao) {
       C: questao.opcao_c,
       D: questao.opcao_d
     },
-    opcoes_array: [
-      { letra: 'A', texto: questao.opcao_a },
-      { letra: 'B', texto: questao.opcao_b },
-      { letra: 'C', texto: questao.opcao_c },
-      { letra: 'D', texto: questao.opcao_d }
-    ],
     resposta_correta: questao.resposta_correta,
-    resposta_correta_texto: letraParaTexto(questao, questao.resposta_correta),
     explicacao: questao.explicacao,
     dificuldade: questao.dificuldade
   };
@@ -677,14 +657,8 @@ function questaoPublica(questao) {
   const q = normalizarQuestao(questao);
   return {
     id: q.id,
-    meta_id: q.meta_id,
     pergunta: q.pergunta,
-    opcao_a: q.opcao_a,
-    opcao_b: q.opcao_b,
-    opcao_c: q.opcao_c,
-    opcao_d: q.opcao_d,
     opcoes: q.opcoes,
-    opcoes_array: q.opcoes_array,
     dificuldade: q.dificuldade
   };
 }
@@ -720,8 +694,8 @@ function broadcastSala(sala, evento, payload) {
 }
 
 function salvarResultadoBatalha(sala) {
-  const xpVitoria = 30;
-  const xpDerrota = 10;
+  const xpVitoria = 50;
+  const xpDerrota = 20;
   
   const transacao = db.transaction(() => {
     sala.jogadores.forEach((jogador) => {
@@ -729,6 +703,12 @@ function salvarResultadoBatalha(sala) {
       stmtInsertBatalha.run(jogador.id, venceu);
       stmtAddXp.run(venceu ? xpVitoria : xpDerrota, jogador.id);
       stmtLevelUpByXp.run(jogador.id);
+      
+      if (venceu) {
+        stmtAddVitoria.run(jogador.id);
+      } else {
+        stmtAddDerrota.run(jogador.id);
+      }
     });
   });
   
@@ -749,48 +729,30 @@ function finalizarSala(salaId, motivo = 'fim') {
   
   if (j1.hp > j2.hp) vencedor = j1;
   else if (j2.hp > j1.hp) vencedor = j2;
+  else if (j1.acertos > j2.acertos) vencedor = j1;
+  else if (j2.acertos > j1.acertos) vencedor = j2;
   
   sala.vencedor = vencedor;
   
   salvarResultadoBatalha(sala);
   
-  const rankingAtualizado = stmtGetRanking.all().map(r => ({
-    ...r,
-    kd: r.derrotas > 0 ? Number(r.vitorias / r.derrotas).toFixed(2) : String(r.vitorias)
-  }));
-  
-  broadcastSala(sala, 'batalha_finalizada', {
-    sala_id: sala.id,
-    motivo,
-    vencedor: vencedor ? {
-      id: vencedor.id,
-      nome: vencedor.nome,
-      avatar: vencedor.avatar
-    } : null,
-    empate: !vencedor,
-    jogadores: sala.jogadores.map(j => ({
-      id: j.id,
-      nome: j.nome,
-      avatar: j.avatar,
-      hp: j.hp,
-      acertos: j.acertos
-    })),
-    ranking: rankingAtualizado
+  broadcastSala(sala, 'fim_batalha', {
+    vencedor_id: vencedor ? vencedor.id : null,
+    vencedor_nome: vencedor ? vencedor.nome : null,
+    hp_final: {
+      [j1.id]: j1.hp,
+      [j2.id]: j2.hp
+    },
+    acertos_final: {
+      [j1.id]: j1.acertos,
+      [j2.id]: j2.acertos
+    }
   });
   
   salasBatalha.delete(salaId);
-}
-
-function prepararRodada(sala) {
-  sala.jogadores.forEach(j => {
-    j.respondeu = false;
-    j.resposta = null;
-    j.tempoResposta = null;
-    j.tempoRestante = null;
-  });
-  sala.primeiroRespondedor = null;
-  sala.primeiroAcertou = false;
-  sala.rodadaProcessada = false;
+  
+  // Atualiza a lista online após a batalha
+  broadcastListaOnline();
 }
 
 function processarRodada(salaId) {
@@ -812,63 +774,53 @@ function processarRodada(salaId) {
   if (j1Correta) j1.acertos += 1;
   if (j2Correta) j2.acertos += 1;
   
-  let resumo = {
-    questao_id: questao.id,
-    resposta_correta: questao.resposta_correta,
-    resposta_correta_texto: letraParaTexto(questao, questao.resposta_correta),
-    explicacao: questao.explicacao,
-    jogadores: []
-  };
+  let danoJ1 = 0, danoJ2 = 0;
   
   if (j1Correta && !j2Correta) {
-    const dano = calcularDano(j1.tempoRestante, 1);
-    j2.hp = Math.max(0, j2.hp - dano);
-    resumo.jogadores.push({ id: j1.id, acertou: true, dano_causado: dano, hp_atual: j1.hp });
-    resumo.jogadores.push({ id: j2.id, acertou: false, dano_causado: 0, hp_atual: j2.hp });
+    danoJ1 = calcularDano(j1.tempoRestante, 1);
+    j2.hp = Math.max(0, j2.hp - danoJ1);
   } else if (!j1Correta && j2Correta) {
-    const dano = calcularDano(j2.tempoRestante, 1);
-    j1.hp = Math.max(0, j1.hp - dano);
-    resumo.jogadores.push({ id: j1.id, acertou: false, dano_causado: 0, hp_atual: j1.hp });
-    resumo.jogadores.push({ id: j2.id, acertou: true, dano_causado: dano, hp_atual: j2.hp });
+    danoJ2 = calcularDano(j2.tempoRestante, 1);
+    j1.hp = Math.max(0, j1.hp - danoJ2);
   } else if (j1Correta && j2Correta) {
     const j1Tempo = Number(j1.tempoResposta ?? Number.MAX_SAFE_INTEGER);
     const j2Tempo = Number(j2.tempoResposta ?? Number.MAX_SAFE_INTEGER);
     
     if (j1Tempo < j2Tempo) {
-      const dano = calcularDano(j1.tempoRestante, 0.8);
-      j2.hp = Math.max(0, j2.hp - dano);
-      resumo.jogadores.push({ id: j1.id, acertou: true, dano_causado: dano, hp_atual: j1.hp, bonus_velocidade: true });
-      resumo.jogadores.push({ id: j2.id, acertou: true, dano_causado: 0, hp_atual: j2.hp });
+      danoJ1 = calcularDano(j1.tempoRestante, 0.8);
+      j2.hp = Math.max(0, j2.hp - danoJ1);
     } else if (j2Tempo < j1Tempo) {
-      const dano = calcularDano(j2.tempoRestante, 0.8);
-      j1.hp = Math.max(0, j1.hp - dano);
-      resumo.jogadores.push({ id: j1.id, acertou: true, dano_causado: 0, hp_atual: j1.hp });
-      resumo.jogadores.push({ id: j2.id, acertou: true, dano_causado: dano, hp_atual: j2.hp, bonus_velocidade: true });
-    } else {
-      resumo.jogadores.push({ id: j1.id, acertou: true, dano_causado: 0, hp_atual: j1.hp, empate_velocidade: true });
-      resumo.jogadores.push({ id: j2.id, acertou: true, dano_causado: 0, hp_atual: j2.hp, empate_velocidade: true });
+      danoJ2 = calcularDano(j2.tempoRestante, 0.8);
+      j1.hp = Math.max(0, j1.hp - danoJ2);
     }
-  } else {
-    resumo.jogadores.push({ id: j1.id, acertou: false, dano_causado: 0, hp_atual: j1.hp });
-    resumo.jogadores.push({ id: j2.id, acertou: false, dano_causado: 0, hp_atual: j2.hp });
   }
   
+  // Emite resultado individual para cada jogador
   broadcastSala(sala, 'resultado_rodada', {
-    sala_id: sala.id,
-    rodada: sala.rodadaAtual + 1,
-    total_rodadas: sala.totalRodadas,
-    ...resumo
+    jogador_id: j1.id,
+    acertou: j1Correta,
+    dano_causado: danoJ1,
+    hp_atual: j1.hp,
+    hp_oponente: j2.hp
+  });
+  
+  broadcastSala(sala, 'resultado_rodada', {
+    jogador_id: j2.id,
+    acertou: j2Correta,
+    dano_causado: danoJ2,
+    hp_atual: j2.hp,
+    hp_oponente: j1.hp
   });
   
   if (j1.hp <= 0 || j2.hp <= 0) {
-    finalizarSala(sala.id, 'hp_zero');
+    setTimeout(() => finalizarSala(sala.id, 'hp_zero'), 2000);
     return;
   }
   
   sala.rodadaAtual += 1;
   
   if (sala.rodadaAtual >= sala.totalRodadas) {
-    finalizarSala(sala.id, 'rodadas_finais');
+    setTimeout(() => finalizarSala(sala.id, 'rodadas_finais'), 2000);
     return;
   }
   
@@ -887,25 +839,26 @@ function iniciarRodada(salaId) {
     return;
   }
   
-  prepararRodada(sala);
+  sala.jogadores.forEach(j => {
+    j.respondeu = false;
+    j.resposta = null;
+    j.tempoResposta = null;
+    j.tempoRestante = null;
+  });
+  sala.primeiroRespondedor = null;
+  sala.rodadaProcessada = false;
   sala.inicioRodada = now();
   
-  broadcastSala(sala, 'rodada_iniciada', {
-    sala_id: sala.id,
+  broadcastSala(sala, 'nova_pergunta', {
+    pergunta: questao.pergunta,
+    opcoes: questao.opcoes,
+    tempo: 15,
     rodada: sala.rodadaAtual + 1,
-    total_rodadas: sala.totalRodadas,
-    tempo_limite: 15,
-    questao: questaoPublica(questao),
-    jogadores: sala.jogadores.map(j => ({
-      id: j.id,
-      nome: j.nome,
-      avatar: j.avatar,
-      hp: j.hp,
-      acertos: j.acertos
-    }))
+    total: sala.totalRodadas
   });
   
   sala.timeoutRodada = setTimeout(() => {
+    if (!sala) return;
     sala.jogadores.forEach((j) => {
       if (!j.respondeu) {
         j.respondeu = true;
@@ -964,7 +917,6 @@ function criarSalaBatalha(jogador1, jogador2) {
     totalRodadas: questoes.length,
     inicioRodada: null,
     primeiroRespondedor: null,
-    primeiroAcertou: false,
     rodadaProcessada: false,
     timeoutRodada: null,
     vencedor: null
@@ -1004,7 +956,7 @@ function criarSalaBatalha(jogador1, jogador2) {
     });
   }
   
-  setTimeout(() => iniciarRodada(salaId), 2000);
+  setTimeout(() => iniciarRodada(salaId), 3000);
 }
 
 // =========================
@@ -1016,10 +968,14 @@ io.on('connection', (socket) => {
   socket.on('registrar_usuario_online', (data = {}) => {
     try {
       const usuarioId = Number(data.usuario_id);
-      if (!usuarioId) return;
+      if (!usuarioId) {
+        console.log('⚠️ registrar_usuario_online: usuario_id inválido');
+        return;
+      }
       
       const usuario = stmtGetUsuarioById.get(usuarioId);
       if (!usuario) {
+        console.log(`⚠️ Usuário ${usuarioId} não encontrado no banco`);
         socket.emit('erro_usuario', { mensagem: 'Usuário não encontrado.' });
         return;
       }
@@ -1027,10 +983,34 @@ io.on('connection', (socket) => {
       usuario.socketId = socket.id;
       usuariosOnline.set(usuario.id, usuario);
       
+      console.log(`✅ ${usuario.nome} (ID: ${usuario.id}) está online. Total: ${usuariosOnline.size}`);
+      
       socket.emit('usuario_online_registrado', {
         success: true,
-        usuario: usuario
+        usuario: {
+          id: usuario.id,
+          nome: usuario.nome,
+          avatar: usuario.avatar,
+          level: usuario.level,
+          xp: usuario.xp,
+          setor: usuario.setor
+        }
       });
+      
+      // Broadcast da lista atualizada
+      broadcastListaOnline();
+      
+      // Envia a lista atual para o usuário que acabou de conectar
+      const onlinePlayers = Array.from(usuariosOnline.values()).map(u => ({
+        id: u.id,
+        nome: u.nome,
+        avatar: u.avatar,
+        level: u.level,
+        xp: u.xp,
+        setor: u.setor
+      }));
+      socket.emit('lista_online', onlinePlayers);
+      
     } catch (error) {
       console.error('Erro registrar_usuario_online:', error);
     }
@@ -1103,6 +1083,10 @@ io.on('connection', (socket) => {
       
       usuario.socketId = socket.id;
       usuariosOnline.set(usuario.id, usuario);
+      
+      // Broadcast da lista atualizada
+      broadcastListaOnline();
+      
       entrarNaFilaSemDuplicar(usuario);
       
       socket.emit('fila_status', {
@@ -1131,7 +1115,9 @@ io.on('connection', (socket) => {
         avatar: u.avatar,
         level: u.level,
         xp: u.xp,
-        setor: u.setor
+        setor: u.setor,
+        vitorias_pvp: u.vitorias_pvp || 0,
+        derrotas_pvp: u.derrotas_pvp || 0
       }));
       socket.emit('lista_online', onlinePlayers);
     } catch (error) {
@@ -1311,6 +1297,10 @@ io.on('connection', (socket) => {
     }
   });
   
+  socket.on('ping', () => {
+    socket.emit('pong');
+  });
+  
   socket.on('disconnect', () => {
     console.log('🔌 Cliente desconectado:', socket.id);
     
@@ -1326,6 +1316,8 @@ io.on('connection', (socket) => {
     }
     
     if (usuarioDesconectado) {
+      console.log(`👋 ${usuarioDesconectado.nome} saiu. Total online: ${usuariosOnline.size}`);
+      
       for (const [salaId, sala] of salasBatalha.entries()) {
         const estaNaSala = sala.jogadores.find(j => j.id === usuarioDesconectado.id);
         if (estaNaSala) {
@@ -1337,14 +1329,71 @@ io.on('connection', (socket) => {
           break;
         }
       }
+      
+      // Broadcast da lista atualizada
+      broadcastListaOnline();
     }
   });
 });
-
+// ROTA DA ROLETA DIÁRIA
+app.post('/api/roleta/girar', (req, res) => {
+  try {
+    const { usuario_id } = req.body;
+    
+    if (!usuario_id) {
+      return res.status(400).json({ erro: 'usuario_id é obrigatório' });
+    }
+    
+    const usuario = stmtGetUsuarioById.get(usuario_id);
+    if (!usuario) {
+      return res.status(404).json({ erro: 'Guardião não encontrado' });
+    }
+    
+    const hoje = new Date().toISOString().slice(0, 10);
+    const ultimoGiro = db.prepare('SELECT ultimo_giro FROM usuarios WHERE id = ?').get(usuario_id);
+    
+    if (ultimoGiro && ultimoGiro.ultimo_giro === hoje) {
+      return res.status(400).json({ erro: 'Você já girou hoje! Volte amanhã.' });
+    }
+    
+    const premios = [
+      { index: 0, valor: 10 },
+      { index: 1, valor: 50 },
+      { index: 2, valor: 20 },
+      { index: 3, valor: 100 },
+      { index: 4, valor: 30 },
+      { index: 5, valor: 200 }
+    ];
+    
+    const ganhou = premios[Math.floor(Math.random() * premios.length)];
+    
+    // Atualiza XP e última data de giro
+    const updateStmt = db.prepare(`
+      UPDATE usuarios 
+      SET xp = COALESCE(xp, 0) + ?, 
+          ultimo_giro = ?
+      WHERE id = ?
+    `);
+    updateStmt.run(ganhou.valor, hoje, usuario_id);
+    
+    // Atualiza level baseado no XP
+    stmtLevelUpByXp.run(usuario_id);
+    
+    res.json({
+      index_ganhador: ganhou.index,
+      valor: ganhou.valor,
+      mensagem: `🛡️ Sorte de Guardião! +${ganhou.valor} XP!`
+    });
+  } catch (error) {
+    console.error('Erro na roleta:', error);
+    res.status(500).json({ erro: 'Erro ao processar giro' });
+  }
+});
 // =========================
 // START
 // =========================
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
   console.log(`📡 Socket.IO disponível em ws://localhost:${PORT}`);
+  console.log(`🌐 CORS permitido para: ${CORS_ORIGINS.join(', ')}`);
 });

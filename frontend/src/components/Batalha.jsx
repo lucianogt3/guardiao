@@ -1,4 +1,3 @@
-// src/components/Batalha.jsx
 import React, { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import io from 'socket.io-client'
@@ -15,141 +14,101 @@ import timeupAudio from '../assets/timeup.mp3'
 const Batalha = ({ usuario }) => {
   const navigate = useNavigate()
 
+  // Estados
   const [status, setStatus] = useState('procurando')
   const [contagem, setContagem] = useState(0)
   const [oponente, setOponente] = useState(null)
   const [hp, setHp] = useState({ eu: 100, oponente: 100 })
-  const [hpAnterior, setHpAnterior] = useState({ eu: 100, oponente: 100 })
-  const [acertos, setAcertos] = useState({ eu: 0, oponente: 0 })
   const [perguntaAtual, setPerguntaAtual] = useState(null)
   const [tempo, setTempo] = useState(15)
   const [respondeu, setRespondeu] = useState(false)
   const [resultado, setResultado] = useState(null)
   const [salaId, setSalaId] = useState(null)
   const [jogadoresOnline, setJogadoresOnline] = useState([])
-  const [totalRodadas, setTotalRodadas] = useState(0)
   const [rodadaAtual, setRodadaAtual] = useState(0)
+  const [totalRodadas, setTotalRodadas] = useState(0)
   const [desafioPendente, setDesafioPendente] = useState(null)
   const [conectado, setConectado] = useState(false)
   const [respostaFeedback, setRespostaFeedback] = useState(null)
   const [danoMsg, setDanoMsg] = useState(null)
-  const [comboMsg, setComboMsg] = useState(null)
-  const [bloqueado, setBloqueado] = useState(false)
-  const [mostrarConfirmacaoSaida, setMostrarConfirmacaoSaida] = useState(false)
-  const [aguardandoResposta, setAguardandoResposta] = useState(false)
 
-  const [musicaAtiva, setMusicaAtiva] = useState(true)
-  const [volumeMusica, setVolumeMusica] = useState(0.25)
-  const [volumeEfeitos, setVolumeEfeitos] = useState(0.7)
-  const [audioCarregado, setAudioCarregado] = useState(false)
-
+  // Refs
   const socketRef = useRef(null)
   const timerRef = useRef(null)
   const respondeuRef = useRef(false)
   const musicaRef = useRef(null)
 
   // Sons
-  const acertoSoundRef = useRef(null)
-  const erroSoundRef = useRef(null)
-  const cliqueSoundRef = useRef(null)
-  const vitoriaSoundRef = useRef(null)
-  const derrotaSoundRef = useRef(null)
-  const timeupSoundRef = useRef(null)
+  const sons = useRef({
+    acerto: new Audio(acertoAudio),
+    erro: new Audio(erroAudio),
+    clique: new Audio(cliqueAudio),
+    vitoria: new Audio(vitoriaAudio),
+    derrota: new Audio(derrotaAudio),
+    timeup: new Audio(timeupAudio)
+  })
 
   const tocarEfeito = (nome) => {
-    let soundRef = null
-    switch(nome) {
-      case 'acerto': soundRef = acertoSoundRef.current; break
-      case 'erro': soundRef = erroSoundRef.current; break
-      case 'clique': soundRef = cliqueSoundRef.current; break
-      case 'vitoria': soundRef = vitoriaSoundRef.current; break
-      case 'derrota': soundRef = derrotaSoundRef.current; break
-      case 'timeup': soundRef = timeupSoundRef.current; break
-      default: return
-    }
-    if (soundRef) {
-      try {
-        soundRef.volume = volumeEfeitos
-        soundRef.currentTime = 0
-        soundRef.play().catch(() => {})
-      } catch(e) {}
+    const sound = sons.current[nome]
+    if (sound) {
+      sound.volume = 0.5
+      sound.currentTime = 0
+      sound.play().catch(() => {})
     }
   }
 
-  // Carregar sons
-  useEffect(() => {
-    acertoSoundRef.current = new Audio(acertoAudio)
-    erroSoundRef.current = new Audio(erroAudio)
-    cliqueSoundRef.current = new Audio(cliqueAudio)
-    vitoriaSoundRef.current = new Audio(vitoriaAudio)
-    derrotaSoundRef.current = new Audio(derrotaAudio)
-    timeupSoundRef.current = new Audio(timeupAudio)
-    
-    const sounds = [acertoSoundRef.current, erroSoundRef.current, cliqueSoundRef.current, vitoriaSoundRef.current, derrotaSoundRef.current, timeupSoundRef.current]
-    sounds.forEach(sound => { if(sound) { sound.load(); sound.volume = volumeEfeitos } })
-  }, [])
-
-  // Música
-  useEffect(() => {
-    const musica = new Audio(battleMusica)
-    musica.loop = true
-    musica.volume = volumeMusica
-    musicaRef.current = musica
-    setAudioCarregado(true)
-    return () => { musica.pause() }
-  }, [])
-
-  useEffect(() => {
-    if (musicaRef.current) {
-      musicaRef.current.volume = volumeMusica
-      if (musicaAtiva && status === 'batalhando') {
-        musicaRef.current.play().catch(() => {})
-      } else {
-        musicaRef.current.pause()
-      }
-    }
-  }, [musicaAtiva, volumeMusica, status])
-
   // Socket.IO
   useEffect(() => {
-    if (!usuario || !usuario.id) {
-      navigate('/')
-      return
-    }
+    if (!usuario?.id) return
 
-    console.log('🔌 Conectando ao servidor...')
-    
-    const newSocket = io('http://localhost:5030', {
-      transports: ['websocket', 'polling'],
+    const URL_SERVIDOR = window.location.hostname === 'localhost' 
+      ? 'http://localhost:5030' 
+      : 'https://guardiao.nursetec.com.br'
+
+    // CONEXÃO CORRIGIDA: Inicia por polling para estabilizar no Windows/Nginx
+    const socket = io(URL_SERVIDOR, {
+      transports: ['polling', 'websocket'],
+      secure: true,
       reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000
+      reconnectionAttempts: 10,
+      path: '/socket.io/'
     })
 
-    socketRef.current = newSocket
+    socketRef.current = socket
 
-    newSocket.on('connect', () => {
-  console.log('✅ Conectado ao servidor')
-  setConectado(true)
-  newSocket.emit('registrar_usuario_online', { usuario_id: usuario.id })   // ← corrigido
-  newSocket.emit('get_online_players')
-})
+    socket.on('connect', () => {
+      console.log('✅ Conectado ao Hall de Duelos')
+      setConectado(true)
+      socket.emit('registrar_usuario_online', { usuario_id: usuario.id })
+    })
 
-    newSocket.on('disconnect', () => {
+    socket.on('disconnect', () => {
       console.log('❌ Desconectado do servidor')
       setConectado(false)
     })
 
-    newSocket.on('lista_online', (lista) => {
-      const outros = (lista || []).filter(j => j.id !== usuario.id)
-      setJogadoresOnline(outros)
-      console.log('👥 Jogadores online:', outros.length)
+    // ATUALIZAÇÃO AUTOMÁTICA DA LISTA
+    socket.on('lista_online', (lista) => {
+      console.log('👥 Lista completa recebida do servidor:', lista)
+      console.log('👤 Usuário atual ID:', usuario.id)
+      
+      // Filtra o próprio usuário da lista
+      const outrosJogadores = lista.filter(j => j.id !== usuario.id)
+      console.log('👥 Outros jogadores online:', outrosJogadores)
+      
+      setJogadoresOnline(outrosJogadores)
     })
 
-    // Receber desafio
-    newSocket.on('receber_desafio', (data) => {
-      console.log('📨 Desafio recebido de:', data.desafiante_nome)
+    // Evento específico para quando a lista atualiza
+    socket.on('atualizar_lista', (lista) => {
+      console.log('🔄 Atualização de lista recebida:', lista)
+      const outrosJogadores = lista.filter(j => j.id !== usuario.id)
+      setJogadoresOnline(outrosJogadores)
+    })
+
+    socket.on('receber_desafio', (data) => {
       tocarEfeito('clique')
+      console.log('📨 Desafio recebido de:', data.desafiante_nome)
       setDesafioPendente({
         id: data.desafio_id,
         desafianteId: data.desafiante_id,
@@ -159,183 +118,191 @@ const Batalha = ({ usuario }) => {
       setStatus('desafio_recebido')
     })
 
-    newSocket.on('desafio_enviado', (data) => {
-      console.log('✅ Desafio enviado para:', data.desafiado_nome)
-      const msg = document.createElement('div')
-      msg.className = 'fixed top-20 left-1/2 transform -translate-x-1/2 bg-green-600 text-white px-4 py-2 rounded-lg z-50'
-      msg.textContent = `Desafio enviado para ${data.desafiado_nome}!`
-      document.body.appendChild(msg)
-      setTimeout(() => msg.remove(), 3000)
-    })
-
-    newSocket.on('desafio_aceito', () => {
-      console.log('⚔️ Desafio aceito!')
-    })
-
-    newSocket.on('desafio_recusado', (data) => {
-      console.log('❌ Desafio recusado:', data.mensagem)
-      setDesafioPendente(null)
-      setStatus('procurando')
-      const msg = document.createElement('div')
-      msg.className = 'fixed top-20 left-1/2 transform -translate-x-1/2 bg-red-600 text-white px-4 py-2 rounded-lg z-50'
-      msg.textContent = data.mensagem || 'O jogador recusou seu desafio'
-      document.body.appendChild(msg)
-      setTimeout(() => msg.remove(), 3000)
-    })
-
-    // Batalha iniciada
-    newSocket.on('batalha_iniciada', (data) => {
-      console.log('⚔️ BATALHA INICIADA!', data)
+    socket.on('batalha_iniciada', (data) => {
       tocarEfeito('clique')
+      console.log('⚔️ Batalha iniciada! Sala:', data.sala_id)
       setOponente(data.oponente)
-      setHp({ eu: data.seu_hp, oponente: data.hp_oponente })
-      setHpAnterior({ eu: data.seu_hp, oponente: data.hp_oponente })
-      setAcertos({ eu: 0, oponente: 0 })
       setSalaId(data.sala_id)
       setTotalRodadas(data.total_rodadas)
-      setRodadaAtual(0)
-      setDesafioPendente(null)
+      setHp({ eu: data.seu_hp || 100, oponente: data.hp_oponente || 100 })
       setStatus('batalhando')
-      setAguardandoResposta(false)
-      
       setContagem(3)
-      const interval = setInterval(() => {
-        setContagem(prev => {
-          if (prev <= 1) {
-            clearInterval(interval)
-            return 0
-          }
-          return prev - 1
-        })
-      }, 1000)
     })
 
-    // Nova pergunta
-    newSocket.on('nova_pergunta', (data) => {
-      console.log('📝 Nova pergunta:', data.rodada, '/', data.total)
-      setPerguntaAtual(data)
+    // CORREÇÃO: Evento para nova pergunta (era 'nova_pergunta' no servidor)
+    socket.on('nova_pergunta', (data) => {
+      console.log('📝 Nova pergunta recebida:', data)
+      
+      // Formata a questão para o formato esperado pelo frontend
+      const questaoFormatada = {
+        pergunta: data.pergunta,
+        opcoes: data.opcoes,
+        id: data.id
+      }
+      
+      setPerguntaAtual(questaoFormatada)
       setTempo(data.tempo || 15)
-      setRodadaAtual(data.rodada)
+      setRodadaAtual(data.rodada || 1)
+      setTotalRodadas(data.total || totalRodadas)
       setRespondeu(false)
-      setAguardandoResposta(true)
       respondeuRef.current = false
       setRespostaFeedback(null)
       setDanoMsg(null)
-      setBloqueado(false)
 
+      // Inicia o timer
       if (timerRef.current) clearInterval(timerRef.current)
-      let tempoRestante = data.tempo || 15
+      let t = data.tempo || 15
       timerRef.current = setInterval(() => {
-        tempoRestante -= 1
-        setTempo(tempoRestante)
-        if (tempoRestante <= 0) {
+        t -= 1
+        setTempo(t)
+        if (t <= 0) {
           clearInterval(timerRef.current)
           if (!respondeuRef.current) {
             tocarEfeito('timeup')
-            setRespostaFeedback({ tipo: 'timeout', mensagem: '⏰ Tempo esgotado!' })
-            setAguardandoResposta(false)
-            setTimeout(() => setRespostaFeedback(null), 2000)
+            // Auto-resposta com timeout
+            handleTempoEsgotado()
           }
         }
       }, 1000)
     })
 
-    // Resultado da rodada
-    newSocket.on('resultado_rodada', (data) => {
-      console.log('🎯 Resultado:', data)
+    // Função para quando o tempo acabar
+    const handleTempoEsgotado = () => {
+      if (respondeuRef.current || !salaId) return
+      console.log('⏰ Tempo esgotado!')
+      setRespondeu(true)
+      respondeuRef.current = true
+      
+      socketRef.current.emit('responder_pergunta', {
+        sala_id: salaId,
+        usuario_id: usuario.id,
+        resposta: null,
+        tempo_resposta: 15000,
+        tempo_restante: 0
+      })
+    }
+
+    socket.on('resultado_rodada', (data) => {
+      console.log('🎯 Resultado da rodada:', data)
       clearInterval(timerRef.current)
-      setAguardandoResposta(false)
       
-      setHpAnterior(hp)
-      setHp({ eu: data.hp_jogador1, oponente: data.hp_jogador2 })
-      
-      if (data.acertou === usuario.id) {
-        tocarEfeito('acerto')
-        setAcertos(prev => ({ ...prev, eu: prev.eu + 1 }))
-        setRespostaFeedback({ tipo: 'acerto', mensagem: `✅ Correto! Causou ${data.dano} de dano!` })
-        setDanoMsg({ quem: 'oponente', dano: data.dano })
-        if (data.combo_ativado) {
-          setComboMsg(data.mensagem_combo || '⚡ COMBO!')
-          setTimeout(() => setComboMsg(null), 2000)
-        }
-      } else if (data.acertou !== null && data.acertou !== usuario.id) {
-        tocarEfeito('erro')
-        setAcertos(prev => ({ ...prev, oponente: prev.oponente + 1 }))
-        setRespostaFeedback({ tipo: 'erro', mensagem: `❌ Errado! Sofreu ${data.dano} de dano!` })
-        setDanoMsg({ quem: 'voce', dano: data.dano })
-        if (data.bloqueado) {
-          setBloqueado(true)
-          setTimeout(() => setBloqueado(false), 1500)
-        }
+      // Atualiza HP baseado nos dados recebidos
+      if (data.hp_atual !== undefined && data.hp_oponente !== undefined) {
+        setHp({ eu: data.hp_atual, oponente: data.hp_oponente })
       }
       
-      setTimeout(() => {
-        setRespostaFeedback(null)
-        setDanoMsg(null)
-      }, 2000)
+      if (data.acertou) {
+        tocarEfeito('acerto')
+        setDanoMsg({ quem: 'oponente', valor: data.dano_causado || 15 })
+        setRespostaFeedback({ tipo: 'acerto', msg: `CRÍTICO! -${data.dano_causado || 15} HP` })
+        
+        // Remove a mensagem após 2 segundos
+        setTimeout(() => setDanoMsg(null), 2000)
+        setTimeout(() => setRespostaFeedback(null), 3000)
+      } else if (data.acertou === false) {
+        tocarEfeito('erro')
+        setRespostaFeedback({ tipo: 'erro', msg: `VOCÊ ERROU!` })
+        setTimeout(() => setRespostaFeedback(null), 2000)
+      } else if (data.dano_causado && data.dano_causado > 0) {
+        // Se tomou dano
+        tocarEfeito('erro')
+        setDanoMsg({ quem: 'eu', valor: data.dano_causado })
+        setRespostaFeedback({ tipo: 'erro', msg: `DANO SOFRIDO! -${data.dano_causado} HP` })
+        setTimeout(() => setDanoMsg(null), 2000)
+        setTimeout(() => setRespostaFeedback(null), 3000)
+      }
     })
 
-    // Fim da batalha
-    newSocket.on('fim_batalha', (data) => {
-      console.log('🏁 FIM DA BATALHA! Vencedor:', data.vencedor_nome)
-      clearInterval(timerRef.current)
-      
+    socket.on('fim_batalha', (data) => {
+      console.log('🏁 Batalha finalizada:', data)
       const venceu = data.vencedor_id === usuario.id
-      if (venceu) tocarEfeito('vitoria')
-      else tocarEfeito('derrota')
+      tocarEfeito(venceu ? 'vitoria' : 'derrota')
       
-      setResultado({
-        venceu: venceu,
+      setResultado({ 
+        venceu, 
         vencedor: data.vencedor_nome,
-        hpFinal: data.hp_final,
-        acertosFinal: data.acertos_final
+        meusAcertos: data.acertos_final?.[usuario.id] || 0,
+        meuHp: data.hp_final?.[usuario.id] || 0
       })
       setStatus('finalizado')
       
-      setTimeout(() => navigate('/mapa'), 5000)
+      // Limpa o timer
+      if (timerRef.current) clearInterval(timerRef.current)
     })
 
-    newSocket.on('erro', (data) => {
-      console.error('Erro:', data)
+    socket.on('desafio_recusado', () => {
+      console.log('❌ Desafio recusado')
+      setDesafioPendente(null)
+      setStatus('procurando')
     })
+
+    socket.on('desafio_aceito', (data) => {
+      console.log('✅ Desafio aceito! Iniciando batalha...')
+      // A batalha será iniciada pelo servidor
+    })
+
+    socket.on('erro', (data) => {
+      console.error('❌ Erro do servidor:', data)
+      alert(data.mensagem || 'Ocorreu um erro!')
+    })
+
+    // Ping periódico para manter conexão
+    const pingInterval = setInterval(() => {
+      if (socket.connected) {
+        socket.emit('ping')
+      }
+    }, 30000)
 
     return () => {
+      clearInterval(pingInterval)
       if (timerRef.current) clearInterval(timerRef.current)
-      if (socketRef.current) {
-        socketRef.current.disconnect()
-      }
+      socket.disconnect()
     }
-  }, [usuario, navigate])
+  }, [usuario])
 
-  const enviarDesafio = (jogador) => {
-    if (!socketRef.current) return
-    tocarEfeito('clique')
-    console.log('📨 Enviando desafio para:', jogador.nome)
-    socketRef.current.emit('enviar_desafio', {
-      desafiante_id: usuario.id,
-      desafiado_id: jogador.id
+  // Função para lidar com tempo esgotado (referência)
+  const handleTempoEsgotado = () => {
+    if (respondeuRef.current || !salaId) return
+    console.log('⏰ Tempo esgotado!')
+    setRespondeu(true)
+    respondeuRef.current = true
+    
+    socketRef.current?.emit('responder_pergunta', {
+      sala_id: salaId,
+      usuario_id: usuario.id,
+      resposta: null,
+      tempo_resposta: 15000,
+      tempo_restante: 0
     })
   }
 
+  // Lógica de Contagem Regressiva
+  useEffect(() => {
+    if (contagem > 0) {
+      const t = setTimeout(() => setContagem(contagem - 1), 1000)
+      return () => clearTimeout(t)
+    }
+  }, [contagem])
+
   const aceitarDesafio = () => {
     if (!socketRef.current || !desafioPendente) return
+    console.log('✅ Aceitando desafio:', desafioPendente.id)
     tocarEfeito('clique')
-    console.log('✅ Aceitando desafio de:', desafioPendente.desafianteNome)
     socketRef.current.emit('aceitar_desafio', {
       desafio_id: desafioPendente.id,
       desafiado_id: usuario.id
     })
     setDesafioPendente(null)
-    setStatus('procurando')
+    setStatus('batalhando')
+    setContagem(3)
   }
 
   const recusarDesafio = () => {
     if (!socketRef.current || !desafioPendente) return
+    console.log('❌ Recusando desafio')
     tocarEfeito('clique')
-    console.log('❌ Recusando desafio de:', desafioPendente.desafianteNome)
     socketRef.current.emit('recusar_desafio', {
-      desafio_id: desafioPendente.id,
-      desafiado_id: usuario.id
+      desafio_id: desafioPendente.id
     })
     setDesafioPendente(null)
     setStatus('procurando')
@@ -343,286 +310,283 @@ const Batalha = ({ usuario }) => {
 
   const buscarOponente = () => {
     if (!socketRef.current) return
+    console.log('🔍 Buscando oponente...')
     tocarEfeito('clique')
-    console.log('🔍 Buscando oponente aleatório...')
     socketRef.current.emit('buscar_oponente', { usuario_id: usuario.id })
+    setStatus('procurando')
   }
 
-  const responder = (resposta) => {
-    if (respondeuRef.current || !perguntaAtual || !socketRef.current || !salaId || !aguardandoResposta) return
-    
+  const enviarDesafio = (jogadorId) => {
+    if (!socketRef.current) return
+    console.log('📨 Enviando desafio para:', jogadorId)
     tocarEfeito('clique')
-    console.log('📝 Respondendo:', resposta)
-    respondeuRef.current = true
-    setRespondeu(true)
-    setAguardandoResposta(false)
-    
-    socketRef.current.emit('responder_batalha', {
-      sala_id: salaId,
-      usuario_id: usuario.id,
-      resposta: resposta,
-      tempo: tempo
+    socketRef.current.emit('enviar_desafio', { 
+      desafiante_id: usuario.id, 
+      desafiado_id: jogadorId 
     })
   }
 
-  const desistir = () => {
-    setMostrarConfirmacaoSaida(false)
-    navigate('/mapa')
-  }
-
-  const getAvatarIcon = (avatar) => {
-    const avatares = {
-      guerreiro: '⚔️', mago: '🔮', maga: '🧙', arqueiro: '🏹', arqueira: '🏹',
-      valquiria: '🛡️', paladino: '🛡️', ninja: '🥷', cavaleiro: '🐉', healer: '💚',
-      guardiao: '🛡️', druida: '🌿', berserker: '🪓', samurai: '⚔️', monge: '🙏'
+  const responder = (letra) => {
+    if (respondeuRef.current || !salaId || !perguntaAtual) {
+      console.log('❌ Não pode responder:', { respondeu: respondeuRef.current, salaId, perguntaAtual })
+      return
     }
-    return avatares[avatar?.toLowerCase()] || '⚔️'
+    
+    console.log('📤 Respondendo:', letra)
+    setRespondeu(true)
+    respondeuRef.current = true
+    tocarEfeito('clique')
+
+    if (timerRef.current) clearInterval(timerRef.current)
+
+    socketRef.current.emit('responder_pergunta', {
+      sala_id: salaId,
+      usuario_id: usuario.id,
+      resposta: letra,
+      tempo_resposta: (15 - tempo) * 1000,
+      tempo_restante: tempo
+    })
   }
 
-  // Tela de contagem regressiva
-  if (contagem > 0 && status === 'batalhando') {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-gray-900 to-red-900">
-        <div className="text-center">
-          <div className="text-9xl font-bold text-yellow-500 animate-pulse">{contagem}</div>
-          <p className="text-2xl text-white mt-4">Preparar...</p>
-        </div>
-      </div>
-    )
+  const getAvatar = (avatar) => {
+    const avatares = { guerreiro: '⚔️', mago: '🔮', arqueiro: '🏹', paladino: '🛡️', ninja: '🥷' }
+    return avatares[avatar?.toLowerCase()] || '🛡️'
   }
 
-  // Tela de desafio recebido
-  if (status === 'desafio_recebido' && desafioPendente) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-b from-gray-900 to-red-900">
-        <motion.div 
-          initial={{ scale: 0.9, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          className="bg-gray-800 rounded-2xl p-8 text-center max-w-md w-full border-2 border-yellow-500"
-        >
-          <div className="text-6xl mb-4 animate-bounce">⚔️</div>
-          <h2 className="text-2xl font-bold mb-2 text-yellow-400">Desafio Recebido!</h2>
-          <div className="bg-gray-700 rounded-lg p-4 mb-4">
-            <span className="text-3xl mr-2">{getAvatarIcon(desafioPendente.desafianteAvatar)}</span>
-            <span className="text-xl font-bold text-yellow-400">{desafioPendente.desafianteNome}</span>
-            <p className="text-gray-300 mt-2">desafia você para um duelo!</p>
-          </div>
-          <div className="flex gap-4">
-            <button onClick={aceitarDesafio} className="flex-1 bg-green-600 hover:bg-green-700 py-3 rounded-lg font-bold text-lg transition">⚔️ ACEITAR</button>
-            <button onClick={recusarDesafio} className="flex-1 bg-red-600 hover:bg-red-700 py-3 rounded-lg font-bold text-lg transition">❌ RECUSAR</button>
-          </div>
-        </motion.div>
-      </div>
-    )
-  }
+  // --- RENDERS ---
 
-  // Tela de procura
-  if (status === 'procurando') {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-gradient-to-b from-gray-900 to-red-900">
-        <div className="bg-gray-800 rounded-2xl p-8 text-center max-w-md w-full border-2 border-purple-500">
-          <div className="text-6xl mb-4 animate-pulse">⚔️</div>
-          <h2 className="text-2xl font-bold mb-2 text-yellow-400">Arena de Duelos</h2>
-          <p className="text-gray-400 mb-4">Desafie outros guardiões ou entre no matchmaking!</p>
-
-          <div className="mb-4 text-sm">
-            {conectado ? <span className="text-green-400">✅ Conectado ao servidor</span> : <span className="text-red-400">⚠️ Conectando...</span>}
-          </div>
-
-          <div className="mt-4 border-t border-gray-700 pt-4">
-            <h3 className="text-lg font-bold mb-3 text-purple-300">👥 Heróis Online ({jogadoresOnline.length})</h3>
-            <div className="flex flex-col gap-2 max-h-64 overflow-y-auto">
-              {jogadoresOnline.length === 0 && (
-                <p className="text-gray-500 text-center py-4">{conectado ? 'Nenhum herói online' : 'Aguardando conexão...'}</p>
-              )}
-              {jogadoresOnline.map((j, idx) => (
-                <div key={idx} className="bg-gray-700 rounded-lg p-3 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl">{getAvatarIcon(j.avatar)}</span>
-                    <div>
-                      <p className="font-bold text-white">{j.nome}</p>
-                      <div className="flex items-center gap-1 text-xs text-green-400">
-                        <span className="w-2 h-2 bg-green-400 rounded-full"></span>
-                        Online
-                      </div>
-                    </div>
-                  </div>
-                  <button onClick={() => enviarDesafio(j)} className="bg-yellow-600 hover:bg-yellow-700 py-2 px-4 rounded-lg text-sm font-bold transition">⚔️ Desafiar</button>
-                </div>
-              ))}
+  if (status === 'desafio_recebido' && desafioPendente) return (
+    <div className="min-h-screen bg-black/90 flex items-center justify-center p-6 z-50">
+        <motion.div initial={{ scale: 0.8 }} animate={{ scale: 1 }} className="bg-[#1a1a24] border-4 border-yellow-500 rounded-[2rem] p-8 text-center max-w-sm w-full shadow-2xl">
+            <div className="text-6xl mb-4 animate-bounce">⚔️</div>
+            <h2 className="text-2xl font-black text-white uppercase mb-2">Desafio de Duelo!</h2>
+            <div className="bg-white/5 p-4 rounded-2xl mb-6">
+                <span className="text-4xl block mb-2">{getAvatar(desafioPendente.desafianteAvatar)}</span>
+                <p className="text-yellow-500 font-black uppercase">{desafioPendente.desafianteNome}</p>
+                <p className="text-gray-400 text-xs">está te desafiando para uma batalha!</p>
             </div>
-          </div>
-
-          <div className="mt-4 text-gray-500 text-sm">─ ou ─</div>
-
-          <button onClick={buscarOponente} className="w-full mt-3 bg-purple-600 hover:bg-purple-700 py-3 rounded-lg font-bold transition">🎲 Matchmaking Aleatório</button>
-          <button onClick={() => navigate('/mapa')} className="w-full mt-3 bg-gray-700 hover:bg-gray-600 py-3 rounded-lg transition">Cancelar</button>
-        </div>
-      </div>
-    )
-  }
-
-  // Tela de resultado
-  if (status === 'finalizado' && resultado) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-b from-gray-900 to-red-900">
-        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="bg-gray-800 rounded-2xl p-8 text-center max-w-md w-full border-2 border-yellow-500">
-          <div className="text-7xl mb-4">{resultado.venceu ? '🏆' : '💀'}</div>
-          <h2 className="text-3xl font-bold mb-2 text-yellow-400">{resultado.venceu ? 'VITÓRIA!' : 'DERROTA!'}</h2>
-          <p className="text-white mb-4">{resultado.venceu ? 'Você venceu o duelo!' : 'Você foi derrotado!'}</p>
-          <div className="text-gray-400 text-sm">
-            <p>Seus acertos: {resultado.acertosFinal?.[usuario.id] || 0}</p>
-            <p>Seu HP final: {resultado.hpFinal?.[usuario.id] || 0}</p>
-          </div>
-          <p className="text-gray-500 mt-4">Redirecionando para o mapa...</p>
-        </motion.div>
-      </div>
-    )
-  }
-
-  // Tela da batalha ativa
-  return (
-    <div className="min-h-screen p-4 flex flex-col bg-gradient-to-b from-gray-900 to-red-900">
-      {/* Botão desistir */}
-      <div className="absolute top-4 left-4 z-50">
-        <button onClick={() => setMostrarConfirmacaoSaida(true)} className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg text-white font-bold">🚪 Desistir</button>
-      </div>
-
-      {/* Controles de música */}
-      <div className="absolute top-4 right-4 z-50 bg-black/50 p-2 rounded-lg flex gap-2">
-        <button onClick={() => setMusicaAtiva(!musicaAtiva)} className="text-white text-sm px-2 py-1 rounded bg-purple-600">
-          {musicaAtiva ? '🔊' : '🔇'}
-        </button>
-      </div>
-
-      {/* Combo message */}
-      <AnimatePresence>
-        {comboMsg && (
-          <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}
-            className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50 bg-red-600 border-4 border-yellow-400 rounded-2xl p-6 text-center">
-            <span className="text-3xl font-bold text-yellow-300">{comboMsg}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Bloqueado */}
-      <AnimatePresence>
-        {bloqueado && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/70 flex items-center justify-center z-45">
-            <div className="bg-red-600 border-4 border-yellow-400 rounded-2xl p-8 text-center">
-              <span className="text-4xl font-bold text-white">🔒 VOCÊ FOI BLOQUEADO! 🔒</span>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* HP do jogador */}
-      <div className="mb-4 mt-16">
-        <div className="flex justify-between text-white mb-1"><span>🗡️ VOCÊ</span><span>{hp.eu} HP</span></div>
-        <div className="w-full bg-red-800 rounded-full h-6 overflow-hidden">
-          <motion.div 
-            initial={{ width: `${hpAnterior.eu}%` }}
-            animate={{ width: `${hp.eu}%` }}
-            transition={{ duration: 0.3 }}
-            className="bg-gradient-to-r from-green-500 to-green-400 h-6 rounded-full transition-all"
-          />
-        </div>
-      </div>
-
-      {/* HP do oponente */}
-      <div className="mb-6">
-        <div className="flex justify-between text-white mb-1"><span>🛡️ {oponente?.nome || 'Oponente'}</span><span>{hp.oponente} HP</span></div>
-        <div className="w-full bg-red-800 rounded-full h-6 overflow-hidden">
-          <motion.div 
-            initial={{ width: `${hpAnterior.oponente}%` }}
-            animate={{ width: `${hp.oponente}%` }}
-            transition={{ duration: 0.3 }}
-            className="bg-gradient-to-r from-red-500 to-red-400 h-6 rounded-full transition-all"
-          />
-        </div>
-      </div>
-
-      {/* Placar */}
-      <div className="flex justify-center gap-8 mb-4 text-sm">
-        <span className="text-green-400">✓ {acertos.eu}</span>
-        <span className="text-gray-500">|</span>
-        <span className="text-red-400">{acertos.oponente} ✓</span>
-      </div>
-
-      {/* Rodada */}
-      <div className="text-center mb-2 text-sm text-gray-400">Rodada {rodadaAtual} de {totalRodadas}</div>
-
-      {/* Timer */}
-      <div className="text-center mb-4">
-        <div className={`inline-block px-4 py-2 rounded-full ${tempo <= 5 ? 'bg-red-600 animate-pulse' : 'bg-gray-700'}`}>⏱️ {tempo}s</div>
-      </div>
-
-      {/* Mensagem de dano */}
-      <AnimatePresence>
-        {danoMsg && (
-          <motion.div initial={{ x: danoMsg.quem === 'voce' ? -100 : 100, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: danoMsg.quem === 'voce' ? -100 : 100, opacity: 0 }}
-            className={`fixed top-1/3 left-1/2 transform -translate-x-1/2 z-40 text-2xl font-bold px-6 py-3 rounded-full border-2 ${danoMsg.quem === 'voce' ? 'text-red-400 bg-black/80 border-red-500' : 'text-green-400 bg-black/80 border-green-500'}`}>
-            {danoMsg.quem === 'voce' ? `💔 VOCÊ SOFREU -${danoMsg.dano} HP!` : `⚔️ OPONENTE SOFREU -${danoMsg.dano} HP!`}
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Feedback */}
-      <AnimatePresence>
-        {respostaFeedback && (
-          <motion.div initial={{ y: -50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -50, opacity: 0 }}
-            className={`fixed top-24 left-1/2 transform -translate-x-1/2 z-40 px-6 py-3 rounded-full text-lg font-bold ${respostaFeedback.tipo === 'acerto' ? 'bg-green-600' : 'bg-red-600'}`}>
-            {respostaFeedback.mensagem}
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Pergunta */}
-      {perguntaAtual && aguardandoResposta ? (
-        <div className="bg-gray-800 rounded-2xl p-6 flex-1 border-2 border-purple-500">
-          <p className="text-xl text-white text-center mb-6">{perguntaAtual.pergunta}</p>
-          <div className="grid grid-cols-1 gap-3">
-            {Object.entries(perguntaAtual.opcoes || {}).map(([letra, texto]) => texto && (
-              <button key={letra} onClick={() => responder(letra)} disabled={respondeu}
-                className={`p-4 rounded-xl text-left transition-all ${respondeu ? 'bg-gray-800 cursor-not-allowed opacity-60' : 'bg-gray-700 hover:bg-gray-600 hover:scale-102'} border-2 border-transparent hover:border-yellow-500`}>
-                <span className="font-bold mr-3 text-yellow-400 text-lg">{letra}</span>
-                <span className="text-white">{texto}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : perguntaAtual && !aguardandoResposta ? (
-        <div className="bg-gray-800 rounded-2xl p-6 flex-1 flex items-center justify-center border-2 border-purple-500">
-          <div className="text-center">
-            <div className="text-5xl mb-3 animate-spin">⏳</div>
-            <p className="text-gray-300">Aguardando resultado...</p>
-          </div>
-        </div>
-      ) : (
-        <div className="bg-gray-800 rounded-2xl p-6 flex-1 flex items-center justify-center border-2 border-purple-500">
-          <div className="text-center">
-            <div className="text-5xl mb-3 animate-pulse">⚔️</div>
-            <p className="text-gray-300">Aguardando próxima rodada...</p>
-          </div>
-        </div>
-      )}
-
-      {/* Modal de confirmação */}
-      {mostrarConfirmacaoSaida && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-2xl p-6 text-center max-w-sm w-full border-2 border-yellow-500">
-            <h2 className="text-xl font-bold text-yellow-400 mb-4">Desistir da Batalha?</h2>
-            <p className="text-white mb-4">Você perderá esta batalha por W.O.!</p>
             <div className="flex gap-4">
-              <button onClick={() => setMostrarConfirmacaoSaida(false)} className="flex-1 bg-gray-600 hover:bg-gray-700 py-2 rounded-lg">Cancelar</button>
-              <button onClick={desistir} className="flex-1 bg-red-600 hover:bg-red-700 py-2 rounded-lg">Desistir</button>
+                <button onClick={aceitarDesafio} className="flex-1 bg-green-600 text-white py-3 rounded-xl font-black uppercase hover:bg-green-500 transition-all">Aceitar</button>
+                <button onClick={recusarDesafio} className="flex-1 bg-red-600 text-white py-3 rounded-xl font-black uppercase hover:bg-red-500 transition-all">Recusar</button>
             </div>
-          </div>
-        </div>
-      )}
+        </motion.div>
     </div>
   )
+
+  if (status === 'procurando') return (
+    <div className="min-h-screen bg-[#0f0f15] text-[#d4b483] font-serif p-4 flex flex-col items-center justify-center relative overflow-hidden">
+      <div className="absolute inset-0 opacity-10 pointer-events-none bg-[url('https://www.transparenttextures.com/patterns/dark-matter.png')]"></div>
+      
+      <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="relative z-10 w-full max-w-md">
+        <div className="text-center mb-10">
+          <div className="text-6xl mb-2">⚔️</div>
+          <h1 className="text-4xl font-black uppercase italic tracking-tighter text-white">Arena de Duelos</h1>
+          <p className="text-xs text-purple-400 font-bold uppercase tracking-widest mt-2">
+            {conectado ? '🟢 Conectado ao Hall' : '🔴 Tentando Conexão...'}
+          </p>
+        </div>
+
+        <div className="bg-[#1a1a24] border-2 border-purple-500/30 rounded-3xl p-6 shadow-2xl backdrop-blur-sm">
+          <div className="flex justify-between items-center mb-6">
+            <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Guardiões Online</span>
+            <span className="text-[10px] font-black uppercase tracking-widest text-purple-400">{jogadoresOnline.length} heróis</span>
+          </div>
+
+          <div className="space-y-3 max-h-64 overflow-y-auto pr-2 custom-scrollbar">
+            {jogadoresOnline.length > 0 ? (
+              jogadoresOnline.map(j => (
+                <motion.div 
+                  key={j.id} 
+                  layout 
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="flex justify-between items-center bg-white/5 p-4 rounded-2xl border border-white/5 hover:border-purple-500/50 transition-all"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">{getAvatar(j.avatar)}</span>
+                    <div>
+                      <p className="font-bold text-white text-sm">{j.nome}</p>
+                      <p className="text-[9px] text-gray-500 uppercase tracking-tighter">{j.setor || 'Herói'}</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => enviarDesafio(j.id)}
+                    className="bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-black px-4 py-2 rounded-xl transition-all shadow-lg active:scale-95"
+                  >
+                    DESAFIAR
+                  </button>
+                </motion.div>
+              ))
+            ) : (
+              <div className="text-center py-10">
+                <div className="text-4xl mb-2 opacity-30">👥</div>
+                <p className="text-gray-500 text-sm italic">Nenhum guardião online no momento...</p>
+                <p className="text-gray-600 text-xs mt-2">Tente buscar automaticamente ou aguarde</p>
+              </div>
+            )}
+          </div>
+
+          <button 
+            onClick={buscarOponente}
+            className="w-full mt-8 bg-gradient-to-r from-purple-600 to-blue-600 text-white py-4 rounded-2xl font-black uppercase tracking-widest shadow-lg hover:brightness-110 transition-all active:scale-95"
+          >
+            Busca Automática
+          </button>
+        </div>
+        
+        <button 
+          onClick={() => navigate('/mapa')} 
+          className="w-full mt-6 text-gray-500 text-[10px] font-black uppercase hover:text-white transition-all"
+        >
+          Sair da Arena
+        </button>
+      </motion.div>
+    </div>
+  )
+
+  if (status === 'batalhando') return (
+    <div className="min-h-screen bg-[#050508] text-white font-serif overflow-hidden relative">
+      {/* Header Arena */}
+      <div className="relative z-20 p-4 grid grid-cols-3 items-center bg-gradient-to-b from-black/90 to-transparent">
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">{getAvatar(usuario.avatar)}</span>
+            <span className="font-black text-[10px] uppercase truncate">{usuario.nome}</span>
+          </div>
+          <div className="h-3 bg-gray-900 rounded-full border border-white/10 overflow-hidden">
+            <motion.div 
+              animate={{ width: `${hp.eu}%` }} 
+              transition={{ duration: 0.3 }}
+              className="h-full bg-gradient-to-r from-green-600 to-green-400 shadow-[0_0_10px_rgba(34,197,94,0.5)]" 
+            />
+          </div>
+          <div className="text-right text-[10px] text-gray-500">{hp.eu}%</div>
+        </div>
+        
+        <div className="text-center">
+          <div className="text-2xl font-black italic text-red-600 drop-shadow-[0_0_10px_rgba(220,38,38,0.5)]">VS</div>
+          <div className="text-[10px] text-gray-500 font-bold uppercase">{rodadaAtual} / {totalRodadas}</div>
+        </div>
+        
+        <div className="space-y-2 text-right">
+          <div className="flex items-center gap-2 justify-end">
+            <span className="font-black text-[10px] uppercase truncate">{oponente?.nome}</span>
+            <span className="text-2xl">{getAvatar(oponente?.avatar)}</span>
+          </div>
+          <div className="h-3 bg-gray-900 rounded-full border border-white/10 overflow-hidden">
+            <motion.div 
+              animate={{ width: `${hp.oponente}%` }} 
+              transition={{ duration: 0.3 }}
+              className="h-full bg-gradient-to-l from-red-600 to-red-400 shadow-[0_0_10px_rgba(220,38,38,0.5)]" 
+            />
+          </div>
+          <div className="text-left text-[10px] text-gray-500">{hp.oponente}%</div>
+        </div>
+      </div>
+
+      <main className="relative z-10 max-w-xl mx-auto p-4 flex flex-col h-[80vh] justify-center">
+        {contagem > 0 ? (
+           <motion.div 
+             key={contagem} 
+             initial={{ scale: 3, opacity: 0 }} 
+             animate={{ scale: 1, opacity: 1 }} 
+             exit={{ scale: 0, opacity: 0 }}
+             className="text-center text-9xl font-black text-yellow-500 italic"
+           >
+              {contagem}
+           </motion.div>
+        ) : (
+          <>
+            <div className="text-center mb-6">
+              <span className={`px-6 py-2 rounded-full border-2 font-black ${tempo <= 5 ? 'border-red-600 text-red-500 animate-pulse' : 'border-white/20 text-white'}`}>
+                {tempo}s
+              </span>
+            </div>
+
+            <AnimatePresence>
+                {danoMsg && (
+                    <motion.div 
+                      initial={{ y: 0, opacity: 0, scale: 0.5 }} 
+                      animate={{ y: -100, opacity: 1, scale: 1.5 }} 
+                      exit={{ opacity: 0 }}
+                      className={`fixed top-1/2 left-1/2 -translate-x-1/2 font-black text-5xl z-50 ${danoMsg.quem === 'eu' ? 'text-red-500' : 'text-yellow-500'}`}
+                    >
+                        -{danoMsg.valor} HP
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            <div className="bg-[#1a1a24] border-2 border-white/10 rounded-3xl p-6 shadow-2xl mb-8">
+              <p className="text-lg text-center font-bold">{perguntaAtual?.pergunta || 'Carregando pergunta...'}</p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3">
+              {perguntaAtual?.opcoes && ['A', 'B', 'C', 'D'].map(letra => (
+                <button
+                  key={letra}
+                  onClick={() => responder(letra)}
+                  disabled={respondeu}
+                  className={`p-5 rounded-2xl text-left font-black transition-all border-2 ${
+                    respondeu 
+                      ? 'opacity-30 border-transparent bg-white/5 cursor-not-allowed' 
+                      : 'bg-white/5 border-white/10 hover:border-purple-500 hover:bg-white/10 active:scale-98'
+                  }`}
+                >
+                  <span className="text-purple-500 mr-4 font-bold">{letra}</span>
+                  {perguntaAtual.opcoes[letra]}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </main>
+
+      <AnimatePresence>
+        {respostaFeedback && (
+          <motion.div 
+            initial={{ y: 100 }} 
+            animate={{ y: 0 }} 
+            exit={{ y: 100 }}
+            className={`fixed bottom-0 left-0 right-0 p-6 text-center font-black uppercase tracking-widest text-white ${
+              respostaFeedback.tipo === 'acerto' ? 'bg-green-600' : 'bg-red-600'
+            }`}
+          >
+            {respostaFeedback.msg}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+
+  if (status === 'finalizado') return (
+    <div className="min-h-screen bg-black flex items-center justify-center p-6 text-white">
+      <motion.div 
+        initial={{ scale: 0.8, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        className="bg-[#1a1a24] border-4 border-purple-500 rounded-[3rem] p-10 text-center max-w-sm w-full"
+      >
+        <motion.div 
+          initial={{ scale: 0 }}
+          animate={{ scale: 1 }}
+          transition={{ type: 'spring', delay: 0.2 }}
+          className="text-8xl mb-6"
+        >
+          {resultado?.venceu ? '🏆' : '💀'}
+        </motion.div>
+        <h1 className="text-4xl font-black uppercase italic mb-4">{resultado?.venceu ? 'Vitória!' : 'Derrota!'}</h1>
+        <p className="text-gray-400 mb-2">Acertos: {resultado?.meusAcertos || 0}</p>
+        <p className="text-gray-400 mb-8">HP Restante: {resultado?.meuHp || 0}%</p>
+        <button 
+          onClick={() => navigate('/mapa')} 
+          className="w-full bg-gradient-to-r from-purple-600 to-blue-600 py-4 rounded-2xl font-black uppercase tracking-widest hover:brightness-110 transition-all"
+        >
+          Retornar ao Mapa
+        </button>
+      </motion.div>
+    </div>
+  )
+
+  return null
 }
 
 export default Batalha

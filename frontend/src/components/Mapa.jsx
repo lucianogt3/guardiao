@@ -1,391 +1,180 @@
-// src/components/Mapa.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { motion } from 'framer-motion';
 import axios from 'axios';
 import CustomModal from './CustomModal';
 import menuMusica from '../assets/menu_musica.mp3';
 
-const AVATARES = {
-  guerreiro: '⚔️',
-  maga: '🧙',
-  mago: '🧙',
-  arqueira: '🏹',
-  arqueiro: '🏹',
-  paladina: '🛡️',
-  paladino: '🛡️',
-  ninja: '🥷',
-  cavaleiro: '🐉',
-  cavaleira: '🐉',
-  healer: '💚',
-  curandeiro: '💚',
-  curandeira: '💚',
-  guardiao: '🛡️',
-  guardiã: '🛡️',
-  valquiria: '🪽',
-  valquíria: '🪽',
-  feiticeira: '🔮',
-  feiticeiro: '🔮',
-  druida: '🌿',
-  berserker: '🪓',
-  samurai: '⚔️',
-  monge: '🙏',
-  assassina: '🗡️',
-  assassino: '🗡️'
+const AVATARES = { 
+  guerreiro: '⚔️', maga: '🧙', mago: '🧙', arqueira: '🏹', arqueiro: '🏹', 
+  paladina: '🛡️', paladino: '🛡️', ninja: '🥷', cavaleiro: '🐉', cavaleira: '🐉', 
+  healer: '💚', curandeiro: '💚', curandeira: '💚', guardiao: '🛡️', guardiã: '🛡️' 
 };
 
 const Mapa = ({ usuario, onLogout }) => {
   const navigate = useNavigate();
-
   const [metas, setMetas] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [hoveredMeta, setHoveredMeta] = useState(null);
   const [metasConcluidas, setMetasConcluidas] = useState([]);
-
   const [musicaAtiva, setMusicaAtiva] = useState(true);
-  const [efeitosAtivos, setEfeitosAtivos] = useState(true);
-  const [volumeMusica, setVolumeMusica] = useState(0.25);
-  const [volumeEfeitos, setVolumeEfeitos] = useState(0.7);
-  const [audioCarregado, setAudioCarregado] = useState(false);
-
-  const [modal, setModal] = useState({
-    isOpen: false,
-    title: '',
-    message: '',
-    type: 'info',
-    onClose: null
-  });
-
+  const [modal, setModal] = useState({ isOpen: false, title: '', message: '', type: 'info', onClose: null });
+  
   const audioRef = useRef(null);
-  const efeitosAtivosRef = useRef(true);
-  const volumeEfeitosRef = useRef(0.7);
-
-  // DEBUG: Verificar usuário
-  useEffect(() => {
-    console.log('🔍 Mapa - Usuário recebido:', usuario);
-    console.log('🔍 Nome do usuário:', usuario?.nome);
-  }, [usuario]);
-
-  useEffect(() => {
-    efeitosAtivosRef.current = efeitosAtivos;
-  }, [efeitosAtivos]);
-
-  useEffect(() => {
-    volumeEfeitosRef.current = volumeEfeitos;
-    window.effectVolume = volumeEfeitos;
-  }, [volumeEfeitos]);
-
-  const avatarExibicao =
-    AVATARES[String(usuario?.avatar || '').toLowerCase()] ||
-    usuario?.avatar ||
-    '🛡️';
-
-  const mostrarModal = (title, message, type = 'info', onClose = null) => {
-    setModal({
-      isOpen: true,
-      title,
-      message,
-      type,
-      onClose: () => {
-        setModal((prev) => ({ ...prev, isOpen: false }));
-        if (onClose) onClose();
-      }
-    });
-  };
-
-  const tocarEfeito = (nome) => {
-    if (!efeitosAtivosRef.current) return;
-    if (typeof window.playSound === 'function') {
-      window.effectVolume = volumeEfeitosRef.current;
-      window.playSound(nome);
-    }
-  };
-
-  const tocarMusica = async () => {
-    if (!audioRef.current || !audioCarregado || !musicaAtiva) return false;
-    try {
-      audioRef.current.muted = false;
-      audioRef.current.volume = volumeMusica;
-      audioRef.current.loop = true;
-      await audioRef.current.play();
-      return true;
-    } catch (error) {
-      console.warn('Autoplay bloqueado no mapa:', error);
-      return false;
-    }
-  };
-
-  const pausarMusica = () => {
-    if (!audioRef.current) return;
-    audioRef.current.pause();
-  };
-
-  const carregarMetas = async () => {
-    try {
-      setLoading(true);
-      const response = await axios.get('/api/metas');
-      setMetas(response.data);
-      setError(null);
-    } catch (err) {
-      console.error('Erro ao carregar metas:', err);
-      setError('Não foi possível carregar a trilha.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!usuario || !usuario.id) {
-      navigate('/');
-      return;
-    }
-
-    const concluidas = usuario.metas_concluidas || [];
-    setMetasConcluidas(concluidas);
-    carregarMetas();
-  }, [usuario, navigate]);
 
   useEffect(() => {
     const audio = new Audio(menuMusica);
-    audio.preload = 'auto';
     audio.loop = true;
-    audio.volume = volumeMusica;
-    audio.muted = false;
-
-    const onCanPlayThrough = () => {
-      console.log('Áudio do mapa carregado com sucesso!');
-      audioRef.current = audio;
-      setAudioCarregado(true);
-    };
-
-    const onError = () => {
-      console.error('Erro ao carregar áudio do mapa');
-      setAudioCarregado(false);
-    };
-
-    audio.addEventListener('canplaythrough', onCanPlayThrough);
-    audio.addEventListener('error', onError);
-    audio.load();
-
-    return () => {
-      audio.pause();
-      audio.removeEventListener('canplaythrough', onCanPlayThrough);
-      audio.removeEventListener('error', onError);
-      if (audioRef.current === audio) {
-        audioRef.current = null;
-      }
-    };
-  }, []);
+    audio.volume = 0.2;
+    audioRef.current = audio;
+    const playAudio = () => musicaAtiva && audio.play().catch(() => {});
+    window.addEventListener('click', playAudio, { once: true });
+    return () => { audio.pause(); window.removeEventListener('click', playAudio); };
+  }, [musicaAtiva]);
 
   useEffect(() => {
-    if (!audioRef.current) return;
-    audioRef.current.volume = volumeMusica;
-    if (musicaAtiva) {
-      tocarMusica();
-    } else {
-      pausarMusica();
-    }
-  }, [volumeMusica, musicaAtiva, audioCarregado]);
+    if (!usuario) return navigate('/');
+    setMetasConcluidas(usuario.metas_concluidas || []);
+    carregarMetas();
+  }, [usuario, navigate]);
 
-  useEffect(() => {
-    if (!audioCarregado || !musicaAtiva) return;
-    const liberarAudio = async () => {
-      await tocarMusica();
-    };
-    tocarMusica();
-    window.addEventListener('click', liberarAudio, { once: true });
-    window.addEventListener('keydown', liberarAudio, { once: true });
-    window.addEventListener('touchstart', liberarAudio, { once: true });
-    return () => {
-      window.removeEventListener('click', liberarAudio);
-      window.removeEventListener('keydown', liberarAudio);
-      window.removeEventListener('touchstart', liberarAudio);
-    };
-  }, [audioCarregado, musicaAtiva, volumeMusica]);
-
-  const iniciarQuiz = (metaId) => {
-    tocarEfeito('clique');
-    navigate(`/quiz/${metaId}`);
+  const carregarMetas = async () => {
+    try {
+      const response = await axios.get('/api/metas');
+      setMetas(response.data.sort((a, b) => a.ordem - b.ordem));
+    } catch (err) { console.error(err); } finally { setLoading(false); }
   };
 
-  const irParaBatalha = () => {
-    tocarEfeito('clique');
-    navigate('/batalha');
-  };
+  const isMetaDesbloqueada = (meta) => metasConcluidas.includes(meta.ordem - 1) || meta.ordem === 1;
+  const isMetaConcluida = (meta) => metasConcluidas.includes(meta.id);
 
-  const isMetaDesbloqueada = (meta) => {
-    if (!usuario) return false;
-    if (meta.ordem === 1) return true;
-    const metaAnterior = meta.ordem - 1;
-    return metasConcluidas.includes(metaAnterior);
-  };
-
-  const isMetaConcluida = (meta) => {
-    if (!usuario) return false;
-    return metasConcluidas.includes(meta.id);
-  };
-
-  const getNomeMetaAnterior = (meta) => {
-    const metaAnterior = metas.find((m) => m.ordem === meta.ordem - 1);
-    return metaAnterior ? metaAnterior.titulo : 'anterior';
-  };
-
-  const handleCardClick = (meta) => {
-    const desbloqueada = isMetaDesbloqueada(meta);
-    const concluida = isMetaConcluida(meta);
-
-    if (desbloqueada && !concluida) {
-      tocarEfeito('clique');
-      iniciarQuiz(meta.id);
-    } else if (concluida) {
-      tocarEfeito('clique');
-      mostrarModal(
-        '🏆 META CONCLUÍDA! 🏆',
-        `Você já completou a missão "${meta.titulo}"!\n\nSiga para o próximo desafio!`,
-        'success'
-      );
-    } else {
-      tocarEfeito('erro');
-      mostrarModal(
-        '🔒 MISSÃO BLOQUEADA 🔒',
-        `Complete a missão "${getNomeMetaAnterior(meta)}" primeiro para desbloquear "${meta.titulo}"!`,
-        'error'
-      );
-    }
-  };
-
-  const renderAudioControls = () => (
-    <div className="bg-black/50 border border-purple-500/30 rounded-xl p-3">
-      <div className="flex flex-col sm:flex-row gap-4">
-        <div className="flex-1">
-          <div className="flex items-center justify-between text-sm text-white mb-1">
-            <span>🎵 Música</span>
-            <button onClick={() => setMusicaAtiva(!musicaAtiva)} className={`text-xs px-3 py-1 rounded ${musicaAtiva ? 'bg-purple-600' : 'bg-gray-700'}`}>
-              {musicaAtiva ? 'ON' : 'OFF'}
-            </button>
-          </div>
-          <input type="range" min="0" max="1" step="0.01" value={volumeMusica} onChange={(e) => setVolumeMusica(Number(e.target.value))} className="w-full h-2 rounded-lg bg-gray-700 accent-purple-500" />
-        </div>
-        <div className="flex-1">
-          <div className="flex items-center justify-between text-sm text-white mb-1">
-            <span>🔊 Efeitos</span>
-            <button onClick={() => setEfeitosAtivos(!efeitosAtivos)} className={`text-xs px-3 py-1 rounded ${efeitosAtivos ? 'bg-purple-600' : 'bg-gray-700'}`}>
-              {efeitosAtivos ? 'ON' : 'OFF'}
-            </button>
-          </div>
-          <input type="range" min="0" max="1" step="0.01" value={volumeEfeitos} onChange={(e) => setVolumeEfeitos(Number(e.target.value))} className="w-full h-2 rounded-lg bg-gray-700 accent-purple-500" />
-        </div>
-      </div>
-    </div>
-  );
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 to-purple-900">
-        <div className="text-center"><div className="animate-spin text-6xl mb-4">🗺️</div><p className="text-white text-xl">Carregando sua jornada...</p></div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 to-purple-900">
-        <div className="bg-red-900/50 p-8 rounded-xl text-center">
-          <p className="text-white mb-4">{error}</p>
-          <button onClick={carregarMetas} className="bg-yellow-600 px-4 py-2 rounded">Tentar novamente</button>
-        </div>
-      </div>
-    );
-  }
-
-  const progressoPercentual = (metasConcluidas.length / 6) * 100;
+  if (loading) return <div className="min-h-screen bg-[#f3e5ab] flex items-center justify-center text-[#8b5a2b] font-bold">📜 CARREGANDO TRILHA...</div>;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-slate-900 to-purple-950">
-      {/* Header */}
-      <div className="border-b border-purple-500/30 bg-black/25 backdrop-blur-sm px-4 py-4">
-        <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4">
-          <div className="flex items-center gap-4">
-            <div className="relative">
-              <div className="w-20 h-20 rounded-full bg-gradient-to-br from-yellow-400 via-orange-500 to-red-600 p-[3px] shadow-lg shadow-yellow-500/20">
-                <div className="w-full h-full rounded-full bg-gray-900 flex items-center justify-center text-4xl">
-                  {avatarExibicao}
-                </div>
-              </div>
-            </div>
-            <div>
-              <p className="text-xs uppercase tracking-[0.25em] text-purple-300 mb-1">Guardião em missão</p>
-              <h1 className="text-2xl md:text-3xl font-extrabold text-white leading-tight drop-shadow">
-                {usuario?.nome || 'Guardião Lendário'}
-              </h1>
-              <div className="mt-1 flex flex-wrap items-center gap-3 text-sm">
-                <span className="px-3 py-1 rounded-full bg-yellow-500/15 text-yellow-300 border border-yellow-500/20">Nível {usuario?.level || 1}</span>
-                <span className="px-3 py-1 rounded-full bg-purple-500/15 text-purple-200 border border-purple-500/20">⭐ {usuario?.xp || 0} XP</span>
-                <span className="px-3 py-1 rounded-full bg-sky-500/15 text-sky-200 border border-sky-500/20">🏥 {usuario?.setor || 'Setor não informado'}</span>
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <button onClick={irParaBatalha} className="bg-red-600 hover:bg-red-700 px-5 py-2.5 rounded-lg text-white flex items-center gap-2 transition font-semibold">⚔️ Battle</button>
-            <button onClick={() => { tocarEfeito('clique'); navigate('/perfil'); }} className="bg-blue-600 hover:bg-blue-700 px-5 py-2.5 rounded-lg text-white transition font-semibold">👤 Perfil</button>
-            <button onClick={() => { tocarEfeito('clique'); navigate('/ranking'); }} className="bg-green-600 hover:bg-green-700 px-5 py-2.5 rounded-lg text-white transition font-semibold">🏆 Ranking</button>
-            <button onClick={() => { tocarEfeito('clique'); onLogout(); }} className="bg-gray-700 hover:bg-gray-600 px-5 py-2.5 rounded-lg text-white transition font-semibold">🚪 Sair</button>
-          </div>
-        </div>
+    <div className="min-h-screen bg-[#fdf5e6] text-[#3d2616] font-serif relative overflow-x-hidden">
+      
+      {/* TEXTURA DE FUNDO CLARA */}
+      <div className="fixed inset-0 z-0 opacity-40 pointer-events-none bg-[url('https://www.transparenttextures.com/patterns/papyros.png')]"></div>
+      
+      {/* ELEMENTOS DO MAPA (SOL E BÚSSOLA) */}
+      <div className="fixed inset-0 z-1 pointer-events-none opacity-10">
+        <div className="absolute top-[10%] right-10 text-[80px]">☀️</div>
+        <div className="absolute top-[40%] left-[-40px] text-[180px] -rotate-12 grayscale">🧭</div>
       </div>
 
-      {/* Progresso */}
-      <div className="px-6 py-4 bg-black/30 border-b border-purple-500/20">
-        <div className="max-w-6xl mx-auto">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-            <div><h2 className="text-lg md:text-xl font-bold text-yellow-400">Trilha do Guardião</h2><p className="text-sm text-gray-400">Complete as missões em ordem</p></div>
-            <div className="w-full md:max-w-md">
-              <div className="flex justify-between text-xs text-gray-400 mb-1"><span>Progresso</span><span>{metasConcluidas.length} / 6</span></div>
-              <div className="w-full bg-gray-700 rounded-full h-3 overflow-hidden">
-                <div className="bg-gradient-to-r from-green-400 to-emerald-500 h-3 rounded-full transition-all duration-500" style={{ width: `${progressoPercentual}%` }} />
-              </div>
+      {/* HEADER TÁTICO */}
+      <header className="relative z-30 bg-[#3d2616] border-b-4 border-[#25160b] p-3 shadow-xl">
+        <div className="max-w-5xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div 
+              onClick={() => navigate('/perfil')}
+              className="w-12 h-12 rounded-full border-2 border-yellow-600 bg-[#f3e5ab] flex items-center justify-center text-2xl shadow-lg cursor-pointer hover:scale-105"
+            >
+              {AVATARES[usuario?.avatar?.toLowerCase()] || '🛡️'}
+            </div>
+            <div className="hidden xs:block">
+              <h1 className="text-white text-sm font-black uppercase leading-none">{usuario?.nome}</h1>
+              <p className="text-yellow-500 text-[9px] font-bold uppercase tracking-widest">{usuario?.setor}</p>
             </div>
           </div>
+
+          <div className="flex items-center gap-2">
+             <button onClick={() => navigate('/ranking')} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-[10px] font-black uppercase shadow-lg">🏆 Ranking</button>
+             <button onClick={() => setMusicaAtiva(!musicaAtiva)} className="bg-white/10 text-white w-8 h-8 rounded-full border border-white/20 flex items-center justify-center">
+                {musicaAtiva ? '🔊' : '🔇'}
+             </button>
+             <button onClick={onLogout} className="text-red-400 hover:text-red-300 text-[10px] font-black uppercase ml-1">Sair</button>
+          </div>
         </div>
-      </div>
+      </header>
 
-      {/* Áudio */}
-      <div className="px-6 py-3 border-b border-purple-500/20"><div className="max-w-6xl mx-auto">{renderAudioControls()}</div></div>
+      {/* PAINEL DE STATUS */}
+      <section className="relative z-10 max-w-md mx-auto mt-4 px-4">
+        <div className="bg-[#f3e5ab] border-2 border-[#3d2616] p-3 rounded-xl shadow-md">
+          <div className="flex justify-between items-center mb-1 px-1">
+             <span className="text-[10px] font-black text-[#3d2616] uppercase tracking-tighter">Missões Completas</span>
+             <span className="text-xs font-black text-[#3d2616]">{metasConcluidas.length} / 6</span>
+          </div>
+          <div className="w-full h-2 bg-black/10 rounded-full overflow-hidden">
+             <motion.div 
+               initial={{ width: 0 }} 
+               animate={{ width: `${(metasConcluidas.length / 6) * 100}%` }}
+               className="h-full bg-[#3d2616]"
+             />
+          </div>
+        </div>
+      </section>
 
-      {/* Cards */}
-      <div className="py-12 px-4 overflow-x-auto">
-        <div className="flex flex-wrap justify-center items-start gap-8 md:gap-16 min-w-[700px]">
+      {/* CAMINHO SINUOSO COM PEGADAS */}
+      <main className="relative z-10 max-w-lg mx-auto py-12 px-6 pb-48">
+        <div className="flex flex-col items-center">
+          
           {metas.map((meta, index) => {
-            const desbloqueada = isMetaDesbloqueada(meta);
-            const concluida = isMetaConcluida(meta);
+            const unlocked = isMetaDesbloqueada(meta);
+            const done = isMetaConcluida(meta);
+            const isLeft = index % 2 === 0;
+
             return (
-              <div key={meta.id} className="flex flex-col items-center">
-                {index > 0 && <div className="hidden md:block w-16 md:w-20 h-0.5 border-t-2 border-dashed border-yellow-500/50 -mt-20 mb-10" />}
-                <div onClick={() => handleCardClick(meta)} onMouseEnter={() => setHoveredMeta(meta.id)} onMouseLeave={() => setHoveredMeta(null)} className={`relative w-56 md:w-72 p-5 rounded-2xl text-center transition-all duration-300 cursor-pointer ${concluida ? 'bg-gradient-to-br from-green-800 to-green-950 border-2 border-green-400' : desbloqueada ? 'bg-gradient-to-br from-gray-800 to-gray-950 border-2 border-yellow-500/50 hover:scale-105' : 'bg-gradient-to-br from-gray-800 to-gray-950 border-2 border-gray-600 opacity-60'}`}>
-                  {concluida && <div className="absolute -top-3 -right-3 bg-green-500 rounded-full p-2 shadow-lg"><span className="text-white text-xs font-bold">✓</span></div>}
-                  <div className="text-6xl mb-3">{meta.icone || '📚'}</div>
-                  <div className="text-xs text-gray-400 mb-1 uppercase tracking-wider">Missão {meta.ordem}</div>
-                  <h3 className="text-xl font-bold text-yellow-400 mb-2">{meta.titulo}</h3>
-                  <p className="text-sm text-gray-300 mb-3 line-clamp-2 min-h-[40px]">{meta.descricao || 'Complete esta missão!'}</p>
-                  <div className="flex justify-center items-center gap-2 mb-2"><span className="text-yellow-400">⭐</span><span className="text-white text-sm font-medium">100 XP</span></div>
-                  <div className="mt-3 text-xs font-semibold">{concluida ? <span className="text-green-400">✅ CONCLUÍDA</span> : desbloqueada ? <span className="text-yellow-400 animate-pulse">✨ DISPONÍVEL</span> : <span className="text-gray-500">🔒 BLOQUEADA</span>}</div>
-                </div>
-              </div>
+              <React.Fragment key={meta.id}>
+                {index !== 0 && (
+                  <div className={`flex flex-col items-center py-4 space-y-2 ${isLeft ? 'translate-x-12 -rotate-12' : '-translate-x-12 rotate-12'}`}>
+                    <div className={`w-2 h-2 rounded-full ${done ? 'bg-[#3d2616]' : 'bg-[#3d2616]/20'}`}></div>
+                    <div className={`w-2 h-2 rounded-full ${done ? 'bg-[#3d2616]' : 'bg-[#3d2616]/20'}`}></div>
+                    <div className={`w-2 h-2 rounded-full ${done ? 'bg-[#3d2616]' : 'bg-[#3d2616]/20'}`}></div>
+                    {unlocked && !done && (
+                        <div className="text-lg opacity-40 animate-pulse">👣</div>
+                    )}
+                  </div>
+                )}
+
+                <motion.div
+                  whileTap={unlocked ? { scale: 0.95 } : {}}
+                  onClick={() => unlocked && !done && navigate(`/quiz/${meta.id}`)}
+                  className={`relative w-64 p-4 rounded-2xl border-2 transition-all duration-300 ${isLeft ? 'self-start' : 'self-end'} ${
+                    done 
+                    ? 'bg-[#3d2616] text-[#f3e5ab] border-[#25160b]' 
+                    : unlocked 
+                    ? 'bg-[#f3e5ab] border-[#3d2616] shadow-xl' 
+                    : 'bg-white/20 border-gray-300 grayscale opacity-40'
+                  }`}
+                  style={{ borderRadius: '20px 50px 20px 50px / 50px 20px 50px 20px' }}
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="text-4xl filter sepia contrast-125">
+                      {done ? '📜' : meta.icone}
+                    </div>
+                    <div className="flex-1">
+                      <span className="block text-[8px] font-black text-[#8b5a2b] uppercase">Missão {meta.ordem}</span>
+                      <h3 className="font-bold text-[11px] uppercase leading-tight tracking-tight">{meta.titulo}</h3>
+                    </div>
+                    {unlocked && !done && (
+                        <div className="absolute -top-3 -right-3 text-4xl text-red-700 font-black rotate-12 drop-shadow-md">X</div>
+                    )}
+                  </div>
+                </motion.div>
+              </React.Fragment>
             );
           })}
         </div>
-        <div className="mt-12 flex flex-wrap justify-center gap-6 text-sm">
-          <div className="flex items-center gap-2"><div className="w-4 h-4 bg-green-600 rounded"></div><span className="text-gray-300">Concluída</span></div>
-          <div className="flex items-center gap-2"><div className="w-4 h-4 bg-gray-700 rounded border-2 border-yellow-500"></div><span className="text-gray-300">Disponível</span></div>
-          <div className="flex items-center gap-2"><div className="w-4 h-4 bg-gray-700 rounded opacity-60 border border-gray-500"></div><span className="text-gray-300">Bloqueada</span></div>
-        </div>
-        <div className="mt-8 text-center">
-          <p className="text-gray-400 text-sm">🎯 Complete as missões em ordem para desbloquear novos desafios!</p>
-          {metasConcluidas.length > 0 && metasConcluidas.length < 6 && (<p className="text-yellow-500 text-sm mt-2 animate-pulse">⚡ Próxima missão: {metas.find(m => m.id === metasConcluidas.length + 1)?.titulo || 'Missão Final'}</p>)}
-        </div>
+      </main>
+
+      {/* BOTÃO ARENA CENTRALIZADO */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-full max-w-xs px-6">
+        <motion.button 
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={() => navigate('/batalha')}
+          className="w-full bg-[#a01a1a] border-b-4 border-[#600a0a] p-4 rounded-2xl shadow-2xl flex items-center justify-between px-8"
+        >
+          <span className="text-xl">⚔️</span>
+          <div className="text-center">
+            <span className="block font-black text-white text-sm uppercase italic leading-none">Arena de Duelos</span>
+            <span className="block text-[8px] text-red-200 font-bold uppercase tracking-[0.2em] mt-1">Combate Técnico</span>
+          </div>
+          <span className="text-xl">⚔️</span>
+        </motion.button>
       </div>
 
-      <CustomModal isOpen={modal.isOpen} onClose={() => { if (modal.onClose) modal.onClose(); else setModal(prev => ({ ...prev, isOpen: false })); }} title={modal.title} message={modal.message} type={modal.type} />
+      <CustomModal isOpen={modal.isOpen} onClose={() => setModal({ ...modal, isOpen: false })} {...modal} />
     </div>
   );
 };

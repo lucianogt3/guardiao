@@ -1,76 +1,112 @@
 from flask import Flask, request, jsonify, session
 from flask_cors import CORS
-from flask_socketio import SocketIO, emit, join_room
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from models import db, Usuario, Meta, Questao, Pontuacao
+from datetime import datetime
 import random
 import time
+import os
+import sys
+import io
+
+# Garante que o console aceite caracteres especiais (emojis de avatar) no Windows
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'hcor-guardioes-2025-game'
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'hcor-guardioes-2025-game')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+# AJUSTE DE COOKIES: Para produção com HTTPS e Domínios cruzados
+app.config['SESSION_COOKIE_SAMESITE'] = 'None'
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SECURE'] = False
+app.config['SESSION_COOKIE_SECURE'] = True 
 
-CORS(app, origins=['http://localhost:5173', 'http://localhost:3000'], supports_credentials=True)
+# CORS: Adicionado suporte para métodos e headers específicos
+CORS(app, 
+     origins=['https://guardiao.nursetec.com.br', 'http://guardiao.nursetec.com.br'], 
+     supports_credentials=True,
+     allow_headers=["Content-Type", "Authorization"],
+     methods=["GET", "POST", "OPTIONS"])
+
 db.init_app(app)
-socketio = SocketIO(app, cors_allowed_origins='*', async_mode='threading')
 
-# Armazenamento temporário
-batalhas_ativas = {}
-fila_matchmaking = []
+# CONFIGURAÇÃO SOCKET.IO: 
+# Usamos async_mode='threading' (compatível com Windows, sem gevent)
+socketio = SocketIO(
+    app, 
+    cors_allowed_origins=["https://guardiao.nursetec.com.br", "http://guardiao.nursetec.com.br"],
+    async_mode='threading', 
+    ping_timeout=60,
+    ping_interval=25,
+    manage_session=False
+)
+
+# ==================== VARIÁVEIS GLOBAIS ====================
 usuarios_online = {}
+fila_matchmaking = []
+batalhas_ativas = {}
 desafios_pendentes = {}
 
-# ==================== FUNÇÃO AUXILIAR ====================
+# ==================== FUNÇÕES AUXILIARES ====================
 def criar_batalha(jogador1, jogador2):
     sala_id = f"batalha_{jogador1['id']}_{jogador2['id']}"
     
+    # 1. Busca as questões no banco de dados
     todas_questoes = Questao.query.all()
-    if len(todas_questoes) < 3:
-        perguntas_batalha = todas_questoes
-    else:
-        perguntas_batalha = random.sample(todas_questoes, min(10, len(todas_questoes)))
+    if len(todas_questoes) < 1:
+        print("❌ Nenhuma questão cadastrada! Batalha não pode começar.")
+        socketio.emit('erro', {'mensagem': 'Sem questões no banco'}, room=jogador1['sid'])
+        socketio.emit('erro', {'mensagem': 'Sem questões no banco'}, room=jogador2['sid'])
+        return
     
+    # Seleciona até 10 questões aleatórias
+    if len(todas_questoes) < 3:
+        selecionadas = todas_questoes
+    else:
+        selecionadas = random.sample(todas_questoes, min(10, len(todas_questoes)))
+    
+    perguntas = [{
+        'id': q.id,
+        'pergunta': q.pergunta,
+        'opcoes': {'A': q.opcao_a, 'B': q.opcao_b, 'C': q.opcao_c, 'D': q.opcao_d},
+        'resposta': q.resposta_correta
+    } for q in selecionadas]
+
+    # 2. Estrutura da batalha
     batalhas_ativas[sala_id] = {
         'jogadores': [jogador1, jogador2],
-        'hp': {jogador1['id']: 100, jogador2['id']: 100},
-        'acertos': {jogador1['id']: 0, jogador2['id']: 0},
-        'combo': {jogador1['id']: 0, jogador2['id']: 0},
-        'perguntas': [{
-            'id': q.id,
-            'pergunta': q.pergunta,
-            'opcoes': {'A': q.opcao_a, 'B': q.opcao_b, 'C': q.opcao_c, 'D': q.opcao_d},
-            'resposta': q.resposta_correta
-        } for q in perguntas_batalha],
+        'hp': {str(jogador1['id']): 100, str(jogador2['id']): 100},
+        'acertos': {str(jogador1['id']): 0, str(jogador2['id']): 0},
+        'combo': {str(jogador1['id']): 0, str(jogador2['id']): 0},
+        'perguntas': perguntas,
         'rodada': 0,
         'responderam': set(),
         'vencedor': None,
         'iniciado': False
     }
-    
-    join_room(sala_id, jogador1['sid'])
-    join_room(sala_id, jogador2['sid'])
-    
-    emit('batalha_iniciada', {
-        'sala_id': sala_id,
-        'oponente': {'id': jogador2['id'], 'nome': jogador2['nome'], 'avatar': jogador2['avatar']},
-        'seu_hp': 100,
-        'hp_oponente': 100,
-        'total_rodadas': len(perguntas_batalha)
-    }, room=jogador1['sid'])
-    
-    emit('batalha_iniciada', {
-        'sala_id': sala_id,
-        'oponente': {'id': jogador1['id'], 'nome': jogador1['nome'], 'avatar': jogador1['avatar']},
-        'seu_hp': 100,
-        'hp_oponente': 100,
-        'total_rodadas': len(perguntas_batalha)
-    }, room=jogador2['sid'])
-    
+
+    # 3. Adiciona os jogadores à sala (room)
+    join_room(sala_id, sid=jogador1['sid'])
+    join_room(sala_id, sid=jogador2['sid'])
+
+    socketio.sleep(0.5)  # Pequeno delay para garantir que as rooms foram criadas
+
+    # 4. Envia o evento 'batalha_iniciada' para ambos
+    for jogador, oponente in [(jogador1, jogador2), (jogador2, jogador1)]:
+        socketio.emit('batalha_iniciada', {
+            'sala_id': sala_id,
+            'oponente': {'id': oponente['id'], 'nome': oponente['nome'], 'avatar': oponente['avatar']},
+            'seu_hp': 100,
+            'hp_oponente': 100,
+            'total_rodadas': len(perguntas)
+        }, room=jogador['sid'])
+
     batalhas_ativas[sala_id]['iniciado'] = True
-    socketio.sleep(3)
+    print(f"⚔️ Batalha criada: {jogador1['nome']} vs {jogador2['nome']} (sala {sala_id})")
+    
+    # 5. Aguarda um pouco e envia a primeira pergunta
+    socketio.sleep(2)
     enviar_proxima_pergunta(sala_id)
 
 def enviar_proxima_pergunta(sala_id):
@@ -80,17 +116,19 @@ def enviar_proxima_pergunta(sala_id):
     
     rodada = batalha['rodada']
     if rodada >= len(batalha['perguntas']):
-        hp1 = batalha['hp'][batalha['jogadores'][0]['id']]
-        hp2 = batalha['hp'][batalha['jogadores'][1]['id']]
-        acertos1 = batalha['acertos'][batalha['jogadores'][0]['id']]
-        acertos2 = batalha['acertos'][batalha['jogadores'][1]['id']]
+        # Fim da batalha: determinar vencedor
+        j1, j2 = batalha['jogadores']
+        hp1 = batalha['hp'][str(j1['id'])]
+        hp2 = batalha['hp'][str(j2['id'])]
+        acertos1 = batalha['acertos'][str(j1['id'])]
+        acertos2 = batalha['acertos'][str(j2['id'])]
         
         if hp1 > hp2:
-            vencedor_id = batalha['jogadores'][0]['id']
+            vencedor_id = j1['id']
         elif hp2 > hp1:
-            vencedor_id = batalha['jogadores'][1]['id']
+            vencedor_id = j2['id']
         else:
-            vencedor_id = batalha['jogadores'][0]['id'] if acertos1 > acertos2 else batalha['jogadores'][1]['id']
+            vencedor_id = j1['id'] if acertos1 > acertos2 else j2['id']
         
         finalizar_batalha(sala_id, vencedor_id)
         return
@@ -98,13 +136,14 @@ def enviar_proxima_pergunta(sala_id):
     pergunta = batalha['perguntas'][rodada]
     batalha['responderam'] = set()
     
-    emit('nova_pergunta', {
+    socketio.emit('nova_pergunta', {
         'pergunta': pergunta['pergunta'],
         'opcoes': pergunta['opcoes'],
         'tempo': 15,
         'rodada': rodada + 1,
         'total': len(batalha['perguntas'])
     }, room=sala_id)
+    print(f"📤 Pergunta {rodada+1} enviada para sala {sala_id}")
 
 def finalizar_batalha(sala_id, vencedor_id):
     batalha = batalhas_ativas.get(sala_id)
@@ -112,33 +151,37 @@ def finalizar_batalha(sala_id, vencedor_id):
         return
     
     batalha['vencedor'] = vencedor_id
+    vencedor_id_str = str(vencedor_id)
     
     for jogador in batalha['jogadores']:
         usuario = Usuario.query.get(jogador['id'])
-        pont = Pontuacao.query.filter_by(usuario_id=jogador['id']).first()
-        
-        if jogador['id'] == vencedor_id:
+        if not usuario:
+            continue
+        if str(jogador['id']) == vencedor_id_str:
             usuario.vitorias_pvp += 1
+            usuario.adicionar_xp(50)
+            pont = Pontuacao.query.filter_by(usuario_id=jogador['id']).first()
             if pont:
                 pont.batalhas_vencidas += 1
                 pont.pontuacao_total += 50
-            usuario.adicionar_xp(50)
         else:
             usuario.derrotas_pvp += 1
             usuario.adicionar_xp(20)
-        
         db.session.commit()
     
-    emit('fim_batalha', {
+    vencedor_nome = next((j['nome'] for j in batalha['jogadores'] if str(j['id']) == vencedor_id_str), "Desconhecido")
+    
+    socketio.emit('fim_batalha', {
         'vencedor_id': vencedor_id,
-        'vencedor_nome': next(j['nome'] for j in batalha['jogadores'] if j['id'] == vencedor_id),
+        'vencedor_nome': vencedor_nome,
         'hp_final': batalha['hp'],
         'acertos_final': batalha['acertos']
     }, room=sala_id)
     
-    socketio.sleep(5)
+    socketio.sleep(3)
     if sala_id in batalhas_ativas:
         del batalhas_ativas[sala_id]
+    print(f"🏁 Batalha {sala_id} finalizada. Vencedor: {vencedor_nome}")
 
 # ==================== ROTAS DE USUÁRIO ====================
 @app.route('/api/login', methods=['POST'])
@@ -165,6 +208,7 @@ def login():
         metas_concluidas = [int(i) for i in usuario.metas_concluidas.split(',') if i.strip()]
 
     nome_exibicao = usuario.nome.strip() if usuario.nome and usuario.nome.strip() else "Jogador"
+    posicao_ranking = Usuario.query.filter(Usuario.xp > usuario.xp).count() + 1
 
     return jsonify({
         'id': usuario.id,
@@ -172,48 +216,52 @@ def login():
         'matricula': usuario.matricula,
         'setor': usuario.setor,
         'avatar': usuario.avatar,
-        'xp': usuario.xp,
-        'level': usuario.level,
+        'xp': usuario.xp or 0,
+        'level': usuario.level or 1,
         'metas_concluidas': metas_concluidas,
-        'vitorias': usuario.vitorias_pvp,
-        'derrotas': usuario.derrotas_pvp
+        'batalhas_vencidas': usuario.vitorias_pvp or 0, 
+        'derrotas': usuario.derrotas_pvp or 0,
+        'ranking_posicao': posicao_ranking,
+        'acertos': (usuario.xp // 10) if usuario.xp else 0
     })
 
 @app.route('/api/cadastro', methods=['POST'])
 def cadastrar_usuario():
     try:
         data = request.json
-        print(f"Recebendo cadastro: {data}")
-
-        matricula = str(data.get('matricula', '')).strip()
+        print(f"📥 Recebendo cadastro: {data}")
+        
+        matricula = data.get('matricula')
         nome = data.get('nome')
-        setor = str(data.get('setor', '')).strip()
+        setor = data.get('setor')
         avatar = data.get('avatar', 'guerreiro')
-
-        if not matricula or not setor:
-            return jsonify({'error': 'Matrícula e setor são obrigatórios'}), 400
-
-        existe = Usuario.query.filter_by(matricula=matricula).first()
+        
+        if not matricula or not str(matricula).strip():
+            return jsonify({'error': 'Matrícula é obrigatória'}), 400
+        if not setor or not str(setor).strip():
+            return jsonify({'error': 'Setor é obrigatório'}), 400
+        
+        existe = Usuario.query.filter_by(matricula=str(matricula).strip()).first()
         if existe:
             return jsonify({'error': 'Matrícula já cadastrada'}), 409
-
-        nome_tratado = str(nome).strip() if nome and str(nome).strip() else "Jogador"
-
+        
+        nome_final = str(nome).strip() if nome and str(nome).strip() else f'Jogador {matricula}'
+        
         usuario = Usuario(
-            matricula=matricula,
-            nome=nome_tratado,
-            setor=setor,
+            matricula=str(matricula).strip(),
+            nome=nome_final,
+            setor=str(setor).strip(),
             avatar=avatar
         )
         db.session.add(usuario)
         db.session.commit()
-
+        
         pont = Pontuacao(usuario_id=usuario.id)
         db.session.add(pont)
         db.session.commit()
-
-        print(f"Usuário criado: {usuario.nome} (ID: {usuario.id})")
-
+        
+        print(f"✅ Usuário criado: {usuario.nome} (ID: {usuario.id})")
+        
         return jsonify({
             'success': True,
             'mensagem': 'Cadastro realizado com sucesso!',
@@ -221,16 +269,15 @@ def cadastrar_usuario():
                 'id': usuario.id,
                 'nome': usuario.nome,
                 'matricula': usuario.matricula,
-                'setor': usuario.setor,
                 'avatar': usuario.avatar,
-                'xp': usuario.xp,
                 'level': usuario.level,
+                'xp': usuario.xp,
+                'setor': usuario.setor,
                 'metas_concluidas': []
             }
         })
-
     except Exception as e:
-        print(f"Erro no cadastro: {str(e)}")
+        print(f"❌ Erro no cadastro: {str(e)}")
         db.session.rollback()
         return jsonify({'error': f'Erro interno: {str(e)}'}), 500
 
@@ -242,7 +289,6 @@ def get_perfil(usuario_id):
             return jsonify({'error': 'Usuário não encontrado'}), 404
         
         pontuacao = Pontuacao.query.filter_by(usuario_id=usuario_id).first()
-        
         xp_atual = usuario.xp or 0
         xp_proximo = 600 - (xp_atual % 600)
         
@@ -268,7 +314,7 @@ def get_perfil(usuario_id):
     except Exception as e:
         print(f"Erro em /api/perfil: {e}")
         return jsonify({'error': 'Erro interno no servidor'}), 500
-    
+
 # ==================== ROTAS DE MISSÕES ====================
 @app.route('/api/metas', methods=['GET'])
 def listar_metas():
@@ -297,7 +343,6 @@ def get_questoes_meta(meta_id):
     if len(todas_questoes) == 0:
         return jsonify({'error': 'Não há questões para esta meta'}), 404
 
-    # Agora cada meta traz até 10 questões
     num_questoes = min(10, len(todas_questoes))
     selecionadas = random.sample(todas_questoes, num_questoes)
 
@@ -322,7 +367,6 @@ def responder_questao():
     
     questao_id = data.get('questao_id')
     resposta = data.get('resposta')
-    meta_id = data.get('meta_id')
     
     usuario = Usuario.query.get(usuario_id)
     if not usuario:
@@ -364,10 +408,6 @@ def completar_meta(meta_id):
     if usuario.metas_concluidas:
         metas_concluidas = [int(i) for i in usuario.metas_concluidas.split(',') if i.strip()]
 
-    print(f"DEBUG: Completando meta {meta_id}")
-    print(f"DEBUG: Metas atuais: {metas_concluidas}")
-
-    # Se já concluiu, permite jogar novamente, mas não dá XP de novo
     if meta_id in metas_concluidas:
         return jsonify({
             'success': True,
@@ -381,15 +421,11 @@ def completar_meta(meta_id):
             'mensagem': f'Você refez a Meta {meta_id} com sucesso!'
         })
 
-    # Se ainda não concluiu, grava e dá XP
     metas_concluidas.append(meta_id)
     metas_concluidas = sorted(list(set(metas_concluidas)))
     usuario.metas_concluidas = ",".join(str(m) for m in metas_concluidas)
-
     usuario.adicionar_xp(100)
     db.session.commit()
-
-    print(f"DEBUG: Metas agora: {metas_concluidas}")
 
     return jsonify({
         'success': True,
@@ -423,6 +459,42 @@ def debug_usuario():
         'xp': usuario.xp,
         'level': usuario.level
     })
+
+# ==================== CONFIGURAÇÃO ADM ====================
+ADM_USER = "admin"
+ADM_PASS = "UTI 1" 
+
+@app.route('/api/adm/ranking', methods=['POST'])
+def get_ranking_adm():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+
+    if username != ADM_USER or password != ADM_PASS:
+        return jsonify({'error': 'Acesso negado. Credenciais de ADM incorretas.'}), 403
+
+    ranking_detalhado = db.session.query(
+        Usuario.id,
+        Usuario.nome,
+        Usuario.matricula,
+        Usuario.setor,
+        Pontuacao.pontuacao_total,
+        Usuario.level
+    ).join(Pontuacao, Usuario.id == Pontuacao.usuario_id)\
+     .order_by(Pontuacao.pontuacao_total.desc()).all()
+    
+    lista_premiação = []
+    for idx, r in enumerate(ranking_detalhado):
+        lista_premiação.append({
+            'posicao': idx + 1,
+            'id': r.id,
+            'nome': r.nome,
+            'matricula': r.matricula,
+            'setor': r.setor,
+            'pontos': r.pontuacao_total,
+            'level': r.level
+        })
+    return jsonify(lista_premiação)
 
 # ==================== RANKING ====================
 @app.route('/api/ranking', methods=['GET'])
@@ -472,35 +544,49 @@ def get_ranking_completo():
     return jsonify(resultado)
 
 # ==================== SOCKET.IO ====================
-@socketio.on('entrar_fila')
-def handle_entrar_fila(data):
-    usuario_id = data.get('usuario_id')
-    usuario = Usuario.query.get(usuario_id)
-    if not usuario:
+@socketio.on('registrar_usuario_online')
+def handle_registro(data):
+    usuario_id = str(data.get('usuario_id')) if data.get('usuario_id') else None
+    if not usuario_id:
+        print("⚠️ Tentativa de registro sem ID de usuário.")
         return
     
-    usuarios_online[usuario_id] = {
-        'id': usuario_id,
-        'nome': usuario.nome,
-        'avatar': usuario.avatar,
-        'sid': request.sid
-    }
-    emit('lista_online', list(usuarios_online.values()), broadcast=True)
+    usuario = db.session.get(Usuario, usuario_id)
+    if usuario:
+        usuarios_online[usuario_id] = {
+            'id': usuario_id,
+            'nome': usuario.nome,
+            'avatar': usuario.avatar,
+            'setor': usuario.setor,
+            'sid': request.sid
+        }
+        socketio.emit('lista_online', list(usuarios_online.values()))
+        print(f"✅ Guardião Online: {usuario.nome} | SID: {request.sid}")
+    else:
+        print(f"❌ Usuário ID {usuario_id} não encontrado no banco de dados.")
 
 @socketio.on('buscar_oponente')
 def handle_matchmaking(data):
-    usuario_id = data.get('usuario_id')
-    usuario = Usuario.query.get(usuario_id)
+    usuario_id = str(data.get('usuario_id'))
+    usuario = db.session.get(Usuario, usuario_id)
     if not usuario:
         emit('erro', {'mensagem': 'Usuário não encontrado'})
         return
     
+    # Evita duplicatas na fila e verifica se já está em batalha
+    if any(p['id'] == usuario_id for p in fila_matchmaking):
+        return
+    if any(usuario_id in [str(j['id']) for j in b['jogadores']] for b in batalhas_ativas.values()):
+        emit('erro', {'mensagem': 'Você já está em uma batalha'})
+        return
+
     fila_matchmaking.append({
         'id': usuario_id,
         'nome': usuario.nome,
         'avatar': usuario.avatar,
         'sid': request.sid
     })
+    print(f"⚔️ {usuario.nome} entrou na fila. Total: {len(fila_matchmaking)}")
     
     if len(fila_matchmaking) >= 2:
         jogador1 = fila_matchmaking.pop(0)
@@ -509,31 +595,30 @@ def handle_matchmaking(data):
 
 @socketio.on('enviar_desafio')
 def handle_enviar_desafio(data):
-    desafiante_id = data.get('desafiante_id')
-    desafiado_id = data.get('desafiado_id')
+    desafiante_id = str(data.get('desafiante_id'))
+    desafiado_id = str(data.get('desafiado_id'))
     
-    desafiante = Usuario.query.get(desafiante_id)
-    desafiado = Usuario.query.get(desafiado_id)
+    desafiante = db.session.get(Usuario, desafiante_id)
+    desafiado = db.session.get(Usuario, desafiado_id)
     
     if not desafiante or not desafiado:
         emit('erro', {'mensagem': 'Jogador não encontrado'})
         return
     
     if desafiado_id not in usuarios_online:
-        emit('desafio_recusado', {'mensagem': f'{desafiado.nome} não está online.'}, room=request.sid)
+        emit('desafio_recusado', {'mensagem': f'{desafiado.nome} saiu da arena.'}, room=request.sid)
         return
     
     desafio_id = f"desafio_{desafiante_id}_{desafiado_id}_{int(time.time())}"
     
     desafios_pendentes[desafio_id] = {
         'desafiante_id': desafiante_id,
-        'desafiante_nome': desafiante.nome,
-        'desafiante_avatar': desafiante.avatar,
         'desafiado_id': desafiado_id,
-        'status': 'pendente'
+        'desafiante_nome': desafiante.nome,
+        'desafiante_avatar': desafiante.avatar
     }
     
-    emit('receber_desafio', {
+    socketio.emit('receber_desafio', {
         'desafio_id': desafio_id,
         'desafiante_id': desafiante_id,
         'desafiante_nome': desafiante.nome,
@@ -541,186 +626,186 @@ def handle_enviar_desafio(data):
     }, room=usuarios_online[desafiado_id]['sid'])
     
     emit('desafio_enviado', {'desafiado_nome': desafiado.nome}, room=request.sid)
+    print(f"📨 Desafio enviado: {desafiante.nome} -> {desafiado.nome}")
 
 @socketio.on('aceitar_desafio')
 def handle_aceitar_desafio(data):
     desafio_id = data.get('desafio_id')
-    desafiado_id = data.get('desafiado_id')
+    desafiado_id = str(data.get('desafiado_id'))
     
     desafio = desafios_pendentes.get(desafio_id)
-    if not desafio or desafio['status'] != 'pendente':
-        emit('erro', {'mensagem': 'Desafio expirado'})
+    if not desafio:
+        emit('erro', {'mensagem': 'Desafio expirado'}, room=request.sid)
         return
     
-    desafiante_sid = usuarios_online.get(desafio['desafiante_id'], {}).get('sid')
-    desafiado_sid = usuarios_online.get(desafiado_id, {}).get('sid')
-    
-    if not desafiante_sid or not desafiado_sid:
-        emit('erro', {'mensagem': 'Um dos jogadores saiu'})
+    if desafio['desafiado_id'] != desafiado_id:
         return
     
-    jogador1 = {
-        'id': desafio['desafiante_id'],
-        'nome': desafio['desafiante_nome'],
-        'avatar': desafio['desafiante_avatar'],
-        'sid': desafiante_sid
-    }
-    jogador2 = {
-        'id': desafiado_id,
-        'nome': Usuario.query.get(desafiado_id).nome,
-        'avatar': Usuario.query.get(desafiado_id).avatar,
-        'sid': desafiado_sid
-    }
+    desafiante_id = desafio['desafiante_id']
+    desafiante = usuarios_online.get(desafiante_id)
+    desafiado = usuarios_online.get(desafiado_id)
     
-    emit('desafio_aceito', {}, room=desafiante_sid)
-    emit('desafio_aceito', {}, room=desafiado_sid)
+    if not desafiante or not desafiado:
+        emit('erro', {'mensagem': 'Um dos jogadores está offline'}, room=request.sid)
+        return
     
-    criar_batalha(jogador1, jogador2)
-    del desafios_pendentes[desafio_id]
+    # Remove da fila se estiver
+    fila_matchmaking[:] = [p for p in fila_matchmaking if p['id'] not in (desafiante_id, desafiado_id)]
+    
+    criar_batalha(desafiante, desafiado)
+    desafios_pendentes.pop(desafio_id, None)
+    print(f"✅ Desafio aceito: {desafiante['nome']} vs {desafiado['nome']}")
 
 @socketio.on('recusar_desafio')
 def handle_recusar_desafio(data):
     desafio_id = data.get('desafio_id')
     desafio = desafios_pendentes.get(desafio_id)
     if desafio:
-        desafiante_sid = usuarios_online.get(desafio['desafiante_id'], {}).get('sid')
-        if desafiante_sid:
-            emit('desafio_recusado', {'mensagem': 'O jogador recusou seu desafio.'}, room=desafiante_sid)
-        del desafios_pendentes[desafio_id]
+        desafiante_id = desafio['desafiante_id']
+        socketio.emit('desafio_recusado', {}, room=usuarios_online.get(desafiante_id, {}).get('sid', ''))
+        desafios_pendentes.pop(desafio_id)
+        print("❌ Desafio recusado")
 
-@socketio.on('responder_batalha')
+@socketio.on('responder_pergunta')
 def handle_resposta_batalha(data):
     sala_id = data.get('sala_id')
-    usuario_id = data.get('usuario_id')
+    usuario_id = str(data.get('usuario_id'))
     resposta = data.get('resposta')
-    tempo_resposta = data.get('tempo', 15)
+    tempo_resposta = data.get('tempo_resposta', 15000) / 1000 
     
     batalha = batalhas_ativas.get(sala_id)
-    if not batalha or batalha['vencedor']:
+    if not batalha or batalha.get('vencedor'):
         return
     
     if usuario_id in batalha['responderam']:
         return
     
-    rodada = batalha['rodada']
-    pergunta = batalha['perguntas'][rodada]
-    correta = (resposta and resposta.upper() == pergunta['resposta']) if resposta else False
-    
-    if not correta:
-        batalha['combo'][usuario_id] = 0
-    
-    dano_total = 0
-    combo_ativado = False
-    mensagem_combo = ""
-    
-    if correta:
-        batalha['acertos'][usuario_id] += 1
-        dano_base = 10
-        bonus_rapidez = max(0, (15 - tempo_resposta) * 1.5)
-        dano = int(dano_base + bonus_rapidez)
-        
-        if tempo_resposta <= 6:
-            batalha['combo'][usuario_id] += 1
-            if batalha['combo'][usuario_id] >= 2:
-                dano = int(dano * 1.5)
-                mensagem_combo = "⚡ COMBO x2! +50% dano!"
-            if batalha['combo'][usuario_id] >= 3:
-                dano = int(dano * 2)
-                combo_ativado = True
-                mensagem_combo = "💥 COMBO MASTER x3! DANO DOBRADO! 💥"
-                batalha['combo'][usuario_id] = 0
-        else:
-            batalha['combo'][usuario_id] = 0
-        
-        oponente_id = [j['id'] for j in batalha['jogadores'] if j['id'] != usuario_id][0]
-        dano_total = min(50, dano)
-        batalha['hp'][oponente_id] = max(0, batalha['hp'][oponente_id] - dano_total)
-        
-        emit('resultado_rodada', {
-            'acertou': usuario_id,
-            'dano': dano_total,
-            'correta': True,
-            'combo_ativado': combo_ativado,
-            'mensagem_combo': mensagem_combo,
-            'hp_jogador1': batalha['hp'][batalha['jogadores'][0]['id']],
-            'hp_jogador2': batalha['hp'][batalha['jogadores'][1]['id']]
-        }, room=sala_id)
-    else:
-        emit('resultado_rodada', {
-            'acertou': usuario_id,
-            'dano': 0,
-            'correta': False,
-            'combo_ativado': False,
-            'mensagem_combo': "",
-            'hp_jogador1': batalha['hp'][batalha['jogadores'][0]['id']],
-            'hp_jogador2': batalha['hp'][batalha['jogadores'][1]['id']]
-        }, room=sala_id)
-    
     batalha['responderam'].add(usuario_id)
+    rodada = batalha['rodada']
+    if rodada >= len(batalha['perguntas']):
+        return
     
-    hp1 = batalha['hp'][batalha['jogadores'][0]['id']]
-    hp2 = batalha['hp'][batalha['jogadores'][1]['id']]
+    pergunta = batalha['perguntas'][rodada]
+    correta = (resposta and str(resposta).upper() == str(pergunta['resposta']).upper())
     
-    if hp1 <= 0:
-        finalizar_batalha(sala_id, batalha['jogadores'][1]['id'])
-    elif hp2 <= 0:
-        finalizar_batalha(sala_id, batalha['jogadores'][0]['id'])
-    elif len(batalha['responderam']) == 2:
+    # Encontra o oponente
+    oponente_id = None
+    for jid in batalha['hp'].keys():
+        if jid != usuario_id:
+            oponente_id = jid
+            break
+    
+    dano_causado = 0
+    if correta:
+        batalha['acertos'][usuario_id] = batalha['acertos'].get(usuario_id, 0) + 1
+        bonus = max(0, int(15 - tempo_resposta))
+        dano_causado = 15 + bonus
+        if oponente_id:
+            batalha['hp'][oponente_id] = max(0, batalha['hp'][oponente_id] - dano_causado)
+    
+    socketio.emit('resultado_rodada', {
+        'jogador_id': usuario_id,
+        'acertou': correta,
+        'dano_causado': dano_causado,
+        'hp_atual': batalha['hp'][usuario_id],
+        'hp_oponente': batalha['hp'].get(oponente_id, 0)
+    }, room=sala_id)
+    
+    if len(batalha['responderam']) >= 2:
         batalha['rodada'] += 1
-        socketio.sleep(1.5)
-        enviar_proxima_pergunta(sala_id)
+        # Verifica se alguém morreu
+        hp_values = list(batalha['hp'].values())
+        if hp_values[0] <= 0 or hp_values[1] <= 0:
+            vencedor_id = None
+            for jid, hp in batalha['hp'].items():
+                if hp > 0:
+                    vencedor_id = jid
+                    break
+            if vencedor_id:
+                finalizar_batalha(sala_id, vencedor_id)
+        else:
+            socketio.sleep(2)
+            enviar_proxima_pergunta(sala_id)
 
-@socketio.on('disconnect')
-def handle_disconnect():
-    for i, item in enumerate(fila_matchmaking):
-        if item['sid'] == request.sid:
-            fila_matchmaking.pop(i)
-            break
-    for uid, info in list(usuarios_online.items()):
-        if info['sid'] == request.sid:
-            del usuarios_online[uid]
-            emit('lista_online', list(usuarios_online.values()), broadcast=True)
-            break
+# ==================== ROTA DA ROLETA ====================
+@app.route('/api/roleta/girar', methods=['POST', 'OPTIONS'])
+def girar_roleta():
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
+    data = request.json
+    usuario_id = data.get('usuario_id')
+    
+    usuario = db.session.get(Usuario, usuario_id)
+    if not usuario:
+        return jsonify({"erro": "Guardião não encontrado"}), 404
+
+    hoje = datetime.now().strftime('%Y-%m-%d')
+    if usuario.ultimo_giro == hoje:
+        return jsonify({"erro": "Você já girou hoje! Volte amanhã."}), 400
+
+    premios = [
+        {"index": 0, "valor": 10},
+        {"index": 1, "valor": 50},
+        {"index": 2, "valor": 20},
+        {"index": 3, "valor": 100},
+        {"index": 4, "valor": 30},
+        {"index": 5, "valor": 200}
+    ]
+
+    ganhou = random.choice(premios)
+    usuario.xp += ganhou['valor']
+    usuario.ultimo_giro = hoje
+    
+    try:
+        db.session.commit()
+        return jsonify({
+            "index_ganhador": ganhou['index'],
+            "valor": ganhou['valor'],
+            "mensagem": f"🛡️ Sorte de Guardião! +{ganhou['valor']} XP!"
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": "Erro ao salvar no pergaminho (banco de dados)"}), 500
 
 # ==================== INICIALIZAÇÃO ====================
 if __name__ == '__main__':
     with app.app_context():
+        # 1. CRIA AS TABELAS
         db.create_all()
         
-        # Verificar se existem metas, se não, criar algumas básicas
-        if Meta.query.count() == 0:
-            print("Criando metas padrão...")
-            metas_padrao = [
-                Meta(id=1, titulo="Meta 1", descricao="Complete a primeira meta", icone="🌟", ordem=1),
-                Meta(id=2, titulo="Meta 2", descricao="Complete a segunda meta", icone="⚔️", ordem=2),
-                Meta(id=3, titulo="Meta 3", descricao="Complete a terceira meta", icone="📚", ordem=3),
-                Meta(id=4, titulo="Meta 4", descricao="Complete a quarta meta", icone="🏆", ordem=4),
-                Meta(id=5, titulo="Meta 5", descricao="Complete a quinta meta", icone="🎯", ordem=5),
-                Meta(id=6, titulo="Meta 6", descricao="Complete a sexta meta", icone="👑", ordem=6),
-            ]
-            for meta in metas_padrao:
-                db.session.add(meta)
+        # 2. GARANTE A COLUNA 'ultimo_giro' NA TABELA 'usuario' (se não existir)
+        try:
+            db.session.execute('ALTER TABLE usuario ADD COLUMN ultimo_giro TEXT')
             db.session.commit()
-            print(f"{len(metas_padrao)} metas criadas!")
-            
-            # Criar algumas questões padrão para cada meta
-            print("Criando questões padrão...")
-            for meta_id in range(1, 7):
-                for i in range(1, 11):
-                    questao = Questao(
-                        meta_id=meta_id,
-                        pergunta=f"Pergunta {i} da Meta {meta_id}?",
-                        opcao_a="Opção A",
-                        opcao_b="Opção B",
-                        opcao_c="Opção C",
-                        opcao_d="Opção D",
-                        resposta_correta="A",
-                        explicacao="Esta é a resposta correta!",
-                        dificuldade=1
-                    )
-                    db.session.add(questao)
+            print("✅ Coluna 'ultimo_giro' adicionada com sucesso.")
+        except Exception:
+            pass  # coluna já existe
+        
+        # 3. VERIFICA SE O ADMIN EXISTE
+        admin_existe = Usuario.query.filter_by(matricula='admin').first()
+        if not admin_existe:
+            print("🛡️ Criando usuário Administrador...")
+            novo_adm = Usuario(
+                matricula='admin',
+                nome='Administrador HCOR',
+                setor='UTI 1',
+                avatar='🛡️',
+                level=99,
+                xp=9999
+            )
+            db.session.add(novo_adm)
+            db.session.flush() 
+            db.session.add(Pontuacao(usuario_id=novo_adm.id))
             db.session.commit()
-            print("Questões padrão criadas!")
+            print("✅ Administrador pronto!")
     
-    print("🚀 Servidor rodando em http://localhost:5030")
-    socketio.run(app, debug=True, port=5030, allow_unsafe_werkzeug=True)
+    print("🚀 Servidor HCOR Guardiões ativo em http://127.0.0.1:5030")
+    socketio.run(
+        app, 
+        host='127.0.0.1', 
+        port=5030, 
+        debug=False, 
+        use_reloader=False,
+        allow_unsafe_werkzeug=True
+    )
