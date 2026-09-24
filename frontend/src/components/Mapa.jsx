@@ -11,7 +11,7 @@ const AVATARES = {
   healer: '💚', curandeiro: '💚', curandeira: '💚', guardiao: '🛡️', guardiã: '🛡️' 
 };
 
-const Mapa = ({ usuario, onLogout }) => {
+const Mapa = ({ usuario, onLogout, atualizarUsuario }) => {
   const navigate = useNavigate();
   const [metas, setMetas] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -31,6 +31,7 @@ const Mapa = ({ usuario, onLogout }) => {
     return () => { audio.pause(); window.removeEventListener('click', playAudio); };
   }, [musicaAtiva]);
 
+  // Recarrega os dados quando o usuário mudar
   useEffect(() => {
     if (!usuario) return navigate('/');
     setMetasConcluidas(usuario.metas_concluidas || []);
@@ -41,11 +42,40 @@ const Mapa = ({ usuario, onLogout }) => {
     try {
       const response = await axios.get('/api/metas');
       setMetas(response.data.sort((a, b) => a.ordem - b.ordem));
-    } catch (err) { console.error(err); } finally { setLoading(false); }
+    } catch (err) { 
+      console.error('Erro ao carregar metas:', err); 
+    } finally { 
+      setLoading(false); 
+    }
+  };
+
+  // Função para recarregar os dados do usuário (chamada após completar meta)
+  const recarregarDadosUsuario = async () => {
+    if (atualizarUsuario) {
+      await atualizarUsuario();
+      // Atualiza as metas concluídas localmente
+      if (usuario?.metas_concluidas) {
+        setMetasConcluidas(usuario.metas_concluidas);
+      }
+    }
   };
 
   const isMetaDesbloqueada = (meta) => metasConcluidas.includes(meta.ordem - 1) || meta.ordem === 1;
   const isMetaConcluida = (meta) => metasConcluidas.includes(meta.id);
+
+  const handleQuizClick = async (metaId) => {
+    // Se a meta já foi concluída, não faz nada
+    if (isMetaConcluida(metas.find(m => m.id === metaId))) {
+      setModal({
+        isOpen: true,
+        title: 'Missão Já Concluída',
+        message: 'Você já completou esta missão! Continue sua jornada para a próxima.',
+        type: 'info'
+      });
+      return;
+    }
+    navigate(`/quiz/${metaId}`);
+  };
 
   if (loading) return <div className="min-h-screen bg-[#f3e5ab] flex items-center justify-center text-[#8b5a2b] font-bold">📜 CARREGANDO TRILHA...</div>;
 
@@ -74,6 +104,7 @@ const Mapa = ({ usuario, onLogout }) => {
             <div className="hidden xs:block">
               <h1 className="text-white text-sm font-black uppercase leading-none">{usuario?.nome}</h1>
               <p className="text-yellow-500 text-[9px] font-bold uppercase tracking-widest">{usuario?.setor}</p>
+              <p className="text-yellow-500 text-[8px] font-bold">Level {usuario?.level} | {usuario?.xp} XP</p>
             </div>
           </div>
 
@@ -87,8 +118,38 @@ const Mapa = ({ usuario, onLogout }) => {
         </div>
       </header>
 
-      {/* PAINEL DE STATUS */}
+      {/* PAINEL DE STATUS E ROLETA */}
       <section className="relative z-10 max-w-md mx-auto mt-4 px-4">
+        
+        {/* BOTÃO DA ROLETA */}
+        <motion.button 
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          onClick={() => navigate('/roleta')}
+          style={{
+            width: '100%',
+            background: 'linear-gradient(to right, #d35400, #e67e22)',
+            color: 'white',
+            border: 'none',
+            borderBottom: '4px solid #a04000',
+            borderRadius: '12px',
+            padding: '10px',
+            marginBottom: '10px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '10px',
+            cursor: 'pointer',
+            boxShadow: '0 4px 6px rgba(0,0,0,0.2)'
+          }}
+        >
+          <span style={{ fontSize: '20px' }}>🎡</span>
+          <div style={{ textAlign: 'left' }}>
+            <span style={{ display: 'block', fontWeight: '900', fontSize: '12px', textTransform: 'uppercase' }}>Sorte Diária</span>
+            <span style={{ display: 'block', fontSize: '8px', opacity: '0.9' }}>GANHE XP EXTRA AGORA!</span>
+          </div>
+        </motion.button>
+
         <div className="bg-[#f3e5ab] border-2 border-[#3d2616] p-3 rounded-xl shadow-md">
           <div className="flex justify-between items-center mb-1 px-1">
              <span className="text-[10px] font-black text-[#3d2616] uppercase tracking-tighter">Missões Completas</span>
@@ -127,14 +188,14 @@ const Mapa = ({ usuario, onLogout }) => {
                 )}
 
                 <motion.div
-                  whileTap={unlocked ? { scale: 0.95 } : {}}
-                  onClick={() => unlocked && !done && navigate(`/quiz/${meta.id}`)}
-                  className={`relative w-64 p-4 rounded-2xl border-2 transition-all duration-300 ${isLeft ? 'self-start' : 'self-end'} ${
+                  whileTap={unlocked && !done ? { scale: 0.95 } : {}}
+                  onClick={() => unlocked && !done && handleQuizClick(meta.id)}
+                  className={`relative w-64 p-4 rounded-2xl border-2 transition-all duration-300 cursor-pointer ${isLeft ? 'self-start' : 'self-end'} ${
                     done 
                     ? 'bg-[#3d2616] text-[#f3e5ab] border-[#25160b]' 
                     : unlocked 
-                    ? 'bg-[#f3e5ab] border-[#3d2616] shadow-xl' 
-                    : 'bg-white/20 border-gray-300 grayscale opacity-40'
+                    ? 'bg-[#f3e5ab] border-[#3d2616] shadow-xl hover:shadow-2xl' 
+                    : 'bg-white/20 border-gray-300 grayscale opacity-40 cursor-not-allowed'
                   }`}
                   style={{ borderRadius: '20px 50px 20px 50px / 50px 20px 50px 20px' }}
                 >

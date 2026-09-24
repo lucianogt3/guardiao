@@ -46,13 +46,39 @@ function AppContent() {
     navigate('/')
   }
 
-  // Função para atualizar XP e dados após ganhar na roleta ou quiz
-  const atualizarDadosUsuario = (novosDados) => {
-    setUsuario(prev => {
-      const atualizado = { ...prev, ...novosDados };
-      localStorage.setItem('guardiao_user', JSON.stringify(atualizado));
-      return atualizado;
-    });
+  // Função para atualizar dados do usuário via API (busca do backend)
+  const atualizarUsuario = async () => {
+    if (!usuario?.id) return;
+    try {
+      const response = await axios.get(`/api/perfil/${usuario.id}`, {
+        withCredentials: true
+      });
+      const dadosAtualizados = response.data;
+      setUsuario(prev => ({ ...prev, ...dadosAtualizados }));
+      localStorage.setItem('guardiao_user', JSON.stringify({ ...usuario, ...dadosAtualizados }));
+      return dadosAtualizados;
+    } catch (error) {
+      console.error('Erro ao atualizar usuário:', error);
+    }
+  };
+
+  // Função para atualizar XP após ganhar na roleta
+  const atualizarXp = (valorGanho) => {
+    if (usuario) {
+      const novoXp = (usuario.xp || 0) + valorGanho;
+      setUsuario(prev => ({ ...prev, xp: novoXp }));
+      localStorage.setItem('guardiao_user', JSON.stringify({ ...usuario, xp: novoXp }));
+    }
+  };
+
+  if (!usuario) {
+    return (
+      <Routes>
+        <Route path="/" element={<Login onLogin={handleLogin} />} />
+        <Route path="/cadastro" element={<Cadastro />} />
+        <Route path="*" element={<Login onLogin={handleLogin} />} />
+      </Routes>
+    )
   }
 
   return (
@@ -62,16 +88,24 @@ function AppContent() {
         <Route path="/" element={<Login onLogin={handleLogin} />} />
         <Route path="/cadastro" element={<Cadastro />} />
         
-        {/* Rota do Mapa */}
-        <Route path="/mapa" element={<Mapa usuario={usuario} onLogout={handleLogout} />} />
+        {/* Rota do Mapa - AGORA COM atualizarUsuario */}
+        <Route 
+          path="/mapa" 
+          element={<Mapa usuario={usuario} onLogout={handleLogout} atualizarUsuario={atualizarUsuario} />} 
+        />
         
-        {/* Nova Rota da Roleta */}
+        {/* Rota da Roleta - COM atualizarXp */}
         <Route 
           path="/roleta" 
-          element={<RoletaDiaria usuario={usuario} onPremioRecebido={atualizarDadosUsuario} />} 
+          element={<RoletaDiaria usuario={usuario} onPremioRecebido={atualizarXp} />} 
         />
 
-        <Route path="/quiz/:metaId" element={<Quiz usuario={usuario} />} />
+        {/* Rota do Quiz - AGORA COM atualizarUsuario */}
+        <Route 
+          path="/quiz/:metaId" 
+          element={<Quiz usuario={usuario} atualizarUsuario={atualizarUsuario} />} 
+        />
+        
         <Route path="/batalha" element={<Batalha usuario={usuario} />} />
         <Route path="/ranking" element={<Ranking usuario={usuario} />} />
         <Route path="/perfil" element={<Perfil usuario={usuario} />} />

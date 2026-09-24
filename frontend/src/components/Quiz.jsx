@@ -57,11 +57,32 @@ const Quiz = ({ usuario, atualizarUsuario }) => {
   const finalizarQuiz = async () => {
     try {
       if (acertos >= questoes.length * 0.7) {
-        await axios.post(`/api/completar_meta/${usuario.id}/${metaId}`);
-        atualizarUsuario();
+        await axios.post(
+          `/api/completar-meta/${metaId}`,
+          { usuario_id: usuario.id },
+          { withCredentials: true }
+        );
+        if (atualizarUsuario) {
+          await atualizarUsuario();
+        }
       }
       setFinalizado(true);
-    } catch (err) { console.error(err); }
+    } catch (err) { 
+      console.error('Erro ao finalizar quiz:', err);
+      setFinalizado(true);
+    }
+  };
+
+  // Navega de volta para o mapa e força recarregamento dos dados
+  const voltarParaMapa = () => {
+    // Força o recarregamento dos dados do usuário antes de sair
+    if (atualizarUsuario) {
+      atualizarUsuario().then(() => {
+        navigate('/mapa');
+      });
+    } else {
+      navigate('/mapa');
+    }
   };
 
   if (loading) return <div className="min-h-screen bg-[#fdf5e6] flex items-center justify-center text-[#3d2616] font-black italic">📜 PREPARANDO DESAFIO...</div>;
@@ -77,7 +98,7 @@ const Quiz = ({ usuario, atualizarUsuario }) => {
             <p className="text-xs uppercase font-bold text-[#8b5a2b]">Acertos Totais</p>
           </div>
           <button 
-            onClick={() => navigate('/mapa')}
+            onClick={voltarParaMapa}
             className="w-full bg-[#3d2616] text-[#f3e5ab] py-4 rounded-2xl font-black uppercase shadow-lg active:scale-95 transition-transform"
           >
             Retornar ao Mapa
@@ -92,7 +113,6 @@ const Quiz = ({ usuario, atualizarUsuario }) => {
   return (
     <div className="min-h-screen bg-[#fdf5e6] p-4 font-serif text-[#3d2616]">
       <div className="max-w-xl mx-auto">
-        
         {/* PROGRESSO */}
         <div className="flex justify-between items-end mb-4">
           <div>
@@ -122,14 +142,13 @@ const Quiz = ({ usuario, atualizarUsuario }) => {
             const isCorreta = letra === questao.resposta_correta;
             const isEscolhida = letra === escolha;
 
-            // CORES DE VISIBILIDADE CORRIGIDAS
             let estilo = "bg-white text-[#3d2616] border-[#3d2616]/10 shadow-sm";
             
             if (respondido) {
               if (isCorreta) {
-                estilo = "bg-green-600 text-white border-green-700 shadow-md scale-[1.02] z-10"; // CORREÇÃO: Fundo verde escuro, texto branco
+                estilo = "bg-green-600 text-white border-green-700 shadow-md scale-[1.02] z-10";
               } else if (isEscolhida) {
-                estilo = "bg-red-600 text-white border-red-700 opacity-90"; // CORREÇÃO: Fundo vermelho, texto branco
+                estilo = "bg-red-600 text-white border-red-700 opacity-90";
               } else {
                 estilo = "bg-white text-[#3d2616] opacity-30 border-transparent";
               }

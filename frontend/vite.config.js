@@ -9,14 +9,12 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:5030',
         changeOrigin: true,
-        secure: false,
-        rewrite: (path) => path
+        secure: false
       },
       '/socket.io': {
         target: 'http://localhost:5030',
         ws: true,
-        changeOrigin: true,
-        secure: false
+        changeOrigin: true
       }
     }
   }
